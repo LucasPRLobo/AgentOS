@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -35,7 +36,8 @@ class SQLiteEventLog(EventLog):
 
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self._db_path = str(db_path)
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._lock = threading.Lock()
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_table()
 
@@ -55,20 +57,21 @@ class SQLiteEventLog(EventLog):
         self._conn.commit()
 
     def append(self, event: BaseEvent) -> None:
-        """Append an event to the log."""
+        """Append an event to the log. Thread-safe."""
         payload_json = event.model_dump_json()
-        self._conn.execute(
-            "INSERT INTO events (run_id, seq, timestamp, event_type, payload_json) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (
-                event.run_id,
-                event.seq,
-                event.timestamp.isoformat(),
-                event.event_type.value,
-                payload_json,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO events (run_id, seq, timestamp, event_type, payload_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    event.run_id,
+                    event.seq,
+                    event.timestamp.isoformat(),
+                    event.event_type.value,
+                    payload_json,
+                ),
+            )
+            self._conn.commit()
 
     def _rows_to_events(self, rows: list[tuple[str, ...]]) -> list[BaseEvent]:
         return [BaseEvent.model_validate_json(row[4]) for row in rows]

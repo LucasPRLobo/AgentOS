@@ -21,7 +21,7 @@ class TaskState(StrEnum):
 class TaskNode:
     """A single unit of work in a workflow.
 
-    Wraps a callable with lifecycle state tracking.
+    Wraps a callable with lifecycle state tracking and dependency edges.
     """
 
     def __init__(
@@ -30,6 +30,7 @@ class TaskNode:
         callable: Callable[..., Any],
         *,
         task_id: TaskId | None = None,
+        depends_on: list[TaskNode] | None = None,
     ) -> None:
         self.id: TaskId = task_id or generate_task_id()
         self.name = name
@@ -37,6 +38,14 @@ class TaskNode:
         self.state: TaskState = TaskState.PENDING
         self.result: Any = None
         self.error: Exception | None = None
+        self.depends_on: list[TaskNode] = depends_on or []
+
+    @property
+    def is_ready(self) -> bool:
+        """True if all dependencies have succeeded and this task is pending."""
+        if self.state != TaskState.PENDING:
+            return False
+        return all(d.state == TaskState.SUCCEEDED for d in self.depends_on)
 
     def __repr__(self) -> str:
         return f"TaskNode(name={self.name!r}, state={self.state.value})"
