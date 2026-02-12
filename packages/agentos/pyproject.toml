@@ -1,0 +1,16 @@
+[project]
+name = "agentos"
+version = "0.1.0"
+description = "AgentOS — domain-agnostic cognitive execution substrate"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentos*"]
