@@ -21,8 +21,10 @@ class EventType(StrEnum):
     TOOL_CALL_STARTED = "ToolCallStarted"
     TOOL_CALL_FINISHED = "ToolCallFinished"
     BUDGET_UPDATED = "BudgetUpdated"
+    BUDGET_EXCEEDED = "BudgetExceeded"
     POLICY_DECISION = "PolicyDecision"
     ARTIFACT_CREATED = "ArtifactCreated"
+    STOP_CONDITION = "StopCondition"
 
 
 def _utc_now() -> datetime:
@@ -87,7 +89,19 @@ class PolicyDecision(BaseEvent):
     event_type: EventType = EventType.POLICY_DECISION
 
 
+class BudgetExceeded(BaseEvent):
+    """Emitted when a budget limit is exceeded."""
+
+    event_type: EventType = EventType.BUDGET_EXCEEDED
+
+
 class ArtifactCreated(BaseEvent):
     """Emitted when a new artifact is produced."""
 
     event_type: EventType = EventType.ARTIFACT_CREATED
+
+
+class StopCondition(BaseEvent):
+    """Emitted when a stop condition is triggered."""
+
+    event_type: EventType = EventType.STOP_CONDITION
