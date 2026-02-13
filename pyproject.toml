@@ -17,6 +17,13 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["packages/agentos", "packages/labos"]
+markers = [
+    "integration: cross-module integration tests",
+    "e2e: full end-to-end pipeline tests",
+    "slow: tests that take more than a few seconds",
+    "network: tests requiring network access (e.g. Ollama)",
+    "replay: deterministic replay tests",
+]
 
 [tool.mypy]
 python_version = "3.11"
