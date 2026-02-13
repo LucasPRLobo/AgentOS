@@ -16,7 +16,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["packages/agentos", "packages/labos"]
+pythonpath = ["packages/agentos", "packages/labos", "packages/codeos"]
 markers = [
     "integration: cross-module integration tests",
     "e2e: full end-to-end pipeline tests",
