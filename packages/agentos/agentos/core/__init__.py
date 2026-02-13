@@ -4,6 +4,7 @@ from agentos.core.errors import (
     AgentOSError,
     BudgetExceededError,
     PermissionDeniedError,
+    REPLExecutionError,
     TaskExecutionError,
     ToolValidationError,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "ArtifactId",
     "BudgetExceededError",
     "PermissionDeniedError",
+    "REPLExecutionError",
     "RunId",
     "TaskExecutionError",
     "TaskId",

@@ -21,3 +21,7 @@ class TaskExecutionError(AgentOSError):
 
 class PermissionDeniedError(AgentOSError):
     """Raised when an operation is denied by the permissions engine."""
+
+
+class REPLExecutionError(AgentOSError):
+    """Raised when code execution in the REPL environment fails."""
