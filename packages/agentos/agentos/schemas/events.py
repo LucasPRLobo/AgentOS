@@ -25,6 +25,12 @@ class EventType(StrEnum):
     POLICY_DECISION = "PolicyDecision"
     ARTIFACT_CREATED = "ArtifactCreated"
     STOP_CONDITION = "StopCondition"
+    RLM_ITERATION_STARTED = "RLMIterationStarted"
+    RLM_ITERATION_FINISHED = "RLMIterationFinished"
+    LM_CALL_STARTED = "LMCallStarted"
+    LM_CALL_FINISHED = "LMCallFinished"
+    REPL_EXEC_STARTED = "REPLExecStarted"
+    REPL_EXEC_FINISHED = "REPLExecFinished"
 
 
 def _utc_now() -> datetime:
@@ -105,3 +111,39 @@ class StopCondition(BaseEvent):
     """Emitted when a stop condition is triggered."""
 
     event_type: EventType = EventType.STOP_CONDITION
+
+
+class RLMIterationStarted(BaseEvent):
+    """Emitted when an RLM iteration begins."""
+
+    event_type: EventType = EventType.RLM_ITERATION_STARTED
+
+
+class RLMIterationFinished(BaseEvent):
+    """Emitted when an RLM iteration completes."""
+
+    event_type: EventType = EventType.RLM_ITERATION_FINISHED
+
+
+class LMCallStarted(BaseEvent):
+    """Emitted when a language model call begins."""
+
+    event_type: EventType = EventType.LM_CALL_STARTED
+
+
+class LMCallFinished(BaseEvent):
+    """Emitted when a language model call completes."""
+
+    event_type: EventType = EventType.LM_CALL_FINISHED
+
+
+class REPLExecStarted(BaseEvent):
+    """Emitted when REPL code execution begins."""
+
+    event_type: EventType = EventType.REPL_EXEC_STARTED
+
+
+class REPLExecFinished(BaseEvent):
+    """Emitted when REPL code execution completes."""
+
+    event_type: EventType = EventType.REPL_EXEC_FINISHED
