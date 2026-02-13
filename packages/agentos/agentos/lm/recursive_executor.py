@@ -6,6 +6,7 @@ import hashlib
 import logging
 import time
 from collections.abc import Callable
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -98,6 +99,8 @@ class RecursiveExecutor:
         *,
         run_id: RunId | None = None,
         config: RLMConfig | None = None,
+        extra_vars: dict[str, Any] | None = None,
+        extra_functions: dict[str, Callable] | None = None,
     ) -> tuple[RunId, str | None]:
         """Execute the RLM loop on the given prompt.
 
@@ -121,9 +124,15 @@ class RecursiveExecutor:
         lm_query = self._build_lm_query_closure(rid, cfg, seq)
 
         # 3. Init REPL
+        initial_vars: dict[str, Any] = {"P": prompt}
+        if extra_vars:
+            initial_vars.update(extra_vars)
+        functions: dict[str, Callable] = {"lm_query": lm_query}
+        if extra_functions:
+            functions.update(extra_functions)
         repl = REPLEnvironment(
-            initial_vars={"P": prompt},
-            injected_functions={"lm_query": lm_query},
+            initial_vars=initial_vars,
+            injected_functions=functions,
         )
 
         # 4. Build initial history
