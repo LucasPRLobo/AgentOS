@@ -31,6 +31,9 @@ class EventType(StrEnum):
     LM_CALL_FINISHED = "LMCallFinished"
     REPL_EXEC_STARTED = "REPLExecStarted"
     REPL_EXEC_FINISHED = "REPLExecFinished"
+    AGENT_STEP_STARTED = "AgentStepStarted"
+    AGENT_STEP_FINISHED = "AgentStepFinished"
+    WORKSPACE_SNAPSHOT = "WorkspaceSnapshot"
 
 
 def _utc_now() -> datetime:
@@ -147,3 +150,21 @@ class REPLExecFinished(BaseEvent):
     """Emitted when REPL code execution completes."""
 
     event_type: EventType = EventType.REPL_EXEC_FINISHED
+
+
+class AgentStepStarted(BaseEvent):
+    """Emitted when an agent step begins."""
+
+    event_type: EventType = EventType.AGENT_STEP_STARTED
+
+
+class AgentStepFinished(BaseEvent):
+    """Emitted when an agent step completes."""
+
+    event_type: EventType = EventType.AGENT_STEP_FINISHED
+
+
+class WorkspaceSnapshot(BaseEvent):
+    """Emitted to capture workspace state at run start/end."""
+
+    event_type: EventType = EventType.WORKSPACE_SNAPSHOT

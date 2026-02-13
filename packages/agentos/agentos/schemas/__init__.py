@@ -3,6 +3,8 @@
 from agentos.schemas.artifact import ArtifactMeta
 from agentos.schemas.budget import BudgetDelta, BudgetSpec, BudgetUsage
 from agentos.schemas.events import (
+    AgentStepFinished,
+    AgentStepStarted,
     ArtifactCreated,
     BaseEvent,
     BudgetExceeded,
@@ -22,10 +24,13 @@ from agentos.schemas.events import (
     TaskStarted,
     ToolCallFinished,
     ToolCallStarted,
+    WorkspaceSnapshot,
 )
 from agentos.schemas.tool_call import ToolCallRecord
 
 __all__ = [
+    "AgentStepFinished",
+    "AgentStepStarted",
     "ArtifactCreated",
     "ArtifactMeta",
     "BaseEvent",
@@ -50,4 +55,5 @@ __all__ = [
     "ToolCallFinished",
     "ToolCallRecord",
     "ToolCallStarted",
+    "WorkspaceSnapshot",
 ]
