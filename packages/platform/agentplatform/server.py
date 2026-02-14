@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import urllib.request
+from dataclasses import asdict
 from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from agentos.lm.provider import BaseLMProvider
+from agentos.lm import model_registry
+from agentos.lm.provider import BaseLMProvider, ModelCapabilities
 from agentos.runtime.domain_registry import DomainRegistry
 from agentos.schemas.session import AgentSlotConfig, SessionConfig
 
@@ -18,23 +22,91 @@ from agentplatform.api_schemas import (
     DomainPackDetailResponse,
     DomainPackSummaryResponse,
     EventResponse,
+    ModelCapabilitiesResponse,
+    ModelListEntry,
     SessionDetailResponse,
     SessionSummaryResponse,
+    SettingsResponse,
+    UpdateSettingsRequest,
 )
 from agentplatform.event_stream import EventStreamer
 from agentplatform.orchestrator import SessionOrchestrator
+from agentplatform.settings import PlatformSettings, SettingsManager
 
 logger = logging.getLogger(__name__)
 
 
-def _make_ollama_factory(base_url: str = "http://localhost:11434") -> Callable[[str], BaseLMProvider]:
-    """Create a factory that returns an OllamaProvider for each model name."""
-    from labos.providers.ollama import OllamaProvider
+def _make_provider_factory(
+    settings: PlatformSettings,
+) -> Callable[[str], BaseLMProvider]:
+    """Create a provider factory that routes model names to the correct backend.
+
+    Routing logic:
+    - ``gpt-*``, ``o1*``, ``o3*`` → OpenAI (requires API key)
+    - ``claude-*`` → Anthropic (requires API key)
+    - Managed proxy URL configured → ManagedProxyProvider (fallback)
+    - Everything else → Ollama (local)
+    """
 
     def factory(model_name: str) -> BaseLMProvider:
-        return OllamaProvider(model=model_name, base_url=base_url)
+        # OpenAI models
+        if model_name.startswith(("gpt-", "o1", "o3")):
+            if not settings.has_openai():
+                raise RuntimeError(
+                    f"OpenAI API key required for model '{model_name}'. "
+                    "Configure it via PUT /api/settings."
+                )
+            from agentos.lm.providers.openai import OpenAIProvider
+
+            return OpenAIProvider(model=model_name, api_key=settings.openai_api_key)
+
+        # Anthropic models
+        if model_name.startswith("claude-"):
+            if not settings.has_anthropic():
+                raise RuntimeError(
+                    f"Anthropic API key required for model '{model_name}'. "
+                    "Configure it via PUT /api/settings."
+                )
+            from agentos.lm.providers.anthropic import AnthropicProvider
+
+            return AnthropicProvider(model=model_name, api_key=settings.anthropic_api_key)
+
+        # Managed proxy (if configured and model not matched above)
+        if settings.has_managed():
+            from agentos.lm.providers.managed import ManagedProxyProvider
+
+            return ManagedProxyProvider(
+                model=model_name,
+                proxy_url=settings.managed_proxy_url,  # type: ignore[arg-type]
+                proxy_key=settings.managed_proxy_key,
+            )
+
+        # Default: Ollama (local models)
+        try:
+            from labos.providers.ollama import OllamaProvider
+
+            return OllamaProvider(model=model_name, base_url=settings.ollama_base_url)
+        except ImportError:
+            raise RuntimeError(
+                f"No provider available for model '{model_name}'. "
+                "Install labos for Ollama support, or configure an API key."
+            )
 
     return factory
+
+
+def _fetch_ollama_models(base_url: str) -> list[dict[str, str]]:
+    """Fetch available models from a local Ollama instance."""
+    try:
+        url = f"{base_url.rstrip('/')}/api/tags"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+        return [
+            {"name": m["name"], "size": str(m.get("size", ""))}
+            for m in data.get("models", [])
+        ]
+    except Exception:
+        return []
 
 
 def create_app(
@@ -42,14 +114,16 @@ def create_app(
     lm_provider: BaseLMProvider | None = None,
     lm_provider_factory: Callable[[str], BaseLMProvider] | None = None,
     domain_registry: DomainRegistry | None = None,
+    settings_manager: SettingsManager | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         lm_provider: Default LM provider for all sessions (single model).
         lm_provider_factory: Factory model_name → provider (multi-model).
-            If neither is given, auto-detects Ollama on localhost.
+            If neither is given, builds a settings-based routing factory.
         domain_registry: Pre-configured registry (builtins registered if None).
+        settings_manager: Settings manager instance (uses default if None).
     """
     app = FastAPI(title="AgentOS Platform", version="0.1.0")
 
@@ -61,53 +135,115 @@ def create_app(
         allow_headers=["*"],
     )
 
+    # Initialize settings
+    sm = settings_manager or SettingsManager()
+    settings = sm.load()
+
     # Initialize registry and orchestrator
     registry = domain_registry or DomainRegistry()
     if domain_registry is None:
         register_builtin_packs(registry)
 
-    # Auto-detect Ollama if no provider specified
+    # Build provider factory from settings if none supplied
     if lm_provider is None and lm_provider_factory is None:
-        try:
-            factory = _make_ollama_factory()
-            # Quick connectivity check
-            test_provider = factory("llama3.2:latest")
-            if hasattr(test_provider, "is_available") and test_provider.is_available():
-                lm_provider_factory = factory
-                logger.info("Auto-detected Ollama at localhost:11434")
-            else:
-                logger.warning(
-                    "Ollama not reachable at localhost:11434. "
-                    "Sessions will fail unless an LM provider is configured."
-                )
-        except ImportError:
-            logger.warning("labos.providers.ollama not available, no auto-detection.")
+        lm_provider_factory = _make_provider_factory(settings)
 
     orchestrator = SessionOrchestrator(registry, lm_provider_factory=lm_provider_factory)
     streamer = EventStreamer()
 
-    # Store provider for session starts (fallback for direct lm_provider)
+    # Store on app state for endpoint access
     app.state.lm_provider = lm_provider
     app.state.orchestrator = orchestrator
     app.state.registry = registry
     app.state.streamer = streamer
+    app.state.settings_manager = sm
+    app.state.settings = settings
 
-    # ── Models Endpoint ─────────────────────────────────────────────
+    # ── Settings Endpoints ────────────────────────────────────────────
 
-    @app.get("/api/models")
-    def list_models() -> list[dict[str, str]]:
-        """List available LLM models from the configured provider (Ollama)."""
-        import json
-        import urllib.request
-        try:
-            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=5) as resp:
-                data = json.loads(resp.read())
-            return [
-                {"name": m["name"], "size": str(m.get("size", ""))}
-                for m in data.get("models", [])
-            ]
-        except Exception:
-            return []
+    @app.get("/api/settings", response_model=SettingsResponse)
+    def get_settings() -> dict[str, Any]:
+        """Return current platform settings (API keys masked)."""
+        return app.state.settings.mask_keys()
+
+    @app.put("/api/settings", response_model=SettingsResponse)
+    def update_settings(request: UpdateSettingsRequest) -> dict[str, Any]:
+        """Update platform settings. Only provided fields are changed."""
+        updates = request.model_dump(exclude_unset=True)
+        if not updates:
+            raise HTTPException(status_code=422, detail="No fields to update")
+
+        updated = app.state.settings_manager.update(updates)
+        app.state.settings = updated
+
+        # Rebuild the provider factory with new settings
+        nonlocal lm_provider_factory
+        lm_provider_factory = _make_provider_factory(updated)
+        orchestrator._lm_provider_factory = lm_provider_factory
+
+        return updated.mask_keys()
+
+    # ── Models Endpoints ──────────────────────────────────────────────
+
+    @app.get("/api/models", response_model=list[ModelListEntry])
+    def list_models() -> list[dict[str, Any]]:
+        """List available models from all configured providers."""
+        models: list[dict[str, Any]] = []
+        current_settings: PlatformSettings = app.state.settings
+
+        # Cloud models from registry (available if API key configured)
+        if current_settings.has_openai():
+            for name in model_registry.list_models_by_provider("openai"):
+                caps = model_registry.get_capabilities(name)
+                models.append({
+                    "name": name,
+                    "provider": "openai",
+                    "display_name": caps.display_name,
+                    "available": True,
+                })
+
+        if current_settings.has_anthropic():
+            for name in model_registry.list_models_by_provider("anthropic"):
+                caps = model_registry.get_capabilities(name)
+                models.append({
+                    "name": name,
+                    "provider": "anthropic",
+                    "display_name": caps.display_name,
+                    "available": True,
+                })
+
+        # Ollama models (live-fetched)
+        ollama_models = _fetch_ollama_models(current_settings.ollama_base_url)
+        for m in ollama_models:
+            caps = model_registry.get_capabilities_or_none(m["name"])
+            models.append({
+                "name": m["name"],
+                "provider": "ollama",
+                "display_name": caps.display_name if caps else m["name"],
+                "available": True,
+            })
+
+        # If managed proxy is configured, note it
+        if current_settings.has_managed():
+            models.append({
+                "name": current_settings.default_model,
+                "provider": "managed",
+                "display_name": f"Managed ({current_settings.default_model})",
+                "available": True,
+            })
+
+        return models
+
+    @app.get("/api/models/{model_name}/capabilities", response_model=ModelCapabilitiesResponse)
+    def get_model_capabilities(model_name: str) -> dict[str, Any]:
+        """Return capabilities for a specific model."""
+        caps = model_registry.get_capabilities_or_none(model_name)
+        if caps is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No capability data for model '{model_name}'",
+            )
+        return asdict(caps)
 
     # ── Domain Pack Endpoints ────────────────────────────────────────
 
