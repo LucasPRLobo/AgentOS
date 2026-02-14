@@ -6,6 +6,7 @@ import logging
 from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 from agentos.lm.provider import BaseLMProvider
 from agentos.runtime.domain_registry import DomainRegistry
@@ -51,6 +52,14 @@ def create_app(
         domain_registry: Pre-configured registry (builtins registered if None).
     """
     app = FastAPI(title="AgentOS Platform", version="0.1.0")
+
+    # Allow CORS for local development (Vite dev server on :5173)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Initialize registry and orchestrator
     registry = domain_registry or DomainRegistry()

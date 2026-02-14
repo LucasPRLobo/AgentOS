@@ -7,7 +7,7 @@ from agentplatform.server import create_app
 
 def main() -> None:
     app = create_app()
-    uvicorn.run(app, host="0.0.0.0", port=8420)
+    uvicorn.run(app, host="0.0.0.0", port=8420, ws="wsproto")
 
 
 if __name__ == "__main__":
