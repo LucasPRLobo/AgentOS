@@ -13,6 +13,12 @@ dev = [
     "mypy>=1.0",
     "ruff>=0.4",
 ]
+platform = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "websockets>=12.0",
+    "httpx>=0.27",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
