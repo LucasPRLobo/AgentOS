@@ -286,6 +286,16 @@ class SessionOrchestrator:
             record.state = SessionState.FAILED
             self._emit_session_finished(record, "FAILED")
 
+    # Standard JSON format instructions prepended to every agent's system prompt
+    _ACTION_FORMAT = (
+        "You are an AI agent with access to tools. "
+        "You MUST respond with ONLY a single JSON object (no extra text).\n"
+        "For tool calls:\n"
+        '{"action": "tool_call", "tool": "<tool_name>", "input": {<tool_input>}, "reasoning": "why"}\n'
+        "When you are finished:\n"
+        '{"action": "finish", "result": "<your final output>", "reasoning": "why"}\n\n'
+    )
+
     def _build_agent_task(
         self,
         *,
@@ -299,7 +309,8 @@ class SessionOrchestrator:
         depends_on: list[TaskNode],
     ) -> TaskNode:
         """Create a TaskNode that runs an AgentRunner for the given role."""
-        system_prompt = slot.system_prompt_override or role.system_prompt
+        role_prompt = slot.system_prompt_override or role.system_prompt
+        system_prompt = self._ACTION_FORMAT + role_prompt
         budget_spec = slot.budget_override or role.budget_profile
 
         def _run() -> tuple[RunId, str | None]:
