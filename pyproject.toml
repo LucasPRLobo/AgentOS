@@ -16,7 +16,8 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["packages/agentos", "packages/labos", "packages/codeos"]
+pythonpath = ["packages/agentos", "packages/labos", "packages/codeos", "packages/platform"]
+filterwarnings = ["ignore::DeprecationWarning"]
 markers = [
     "integration: cross-module integration tests",
     "e2e: full end-to-end pipeline tests",
