@@ -84,6 +84,7 @@ class SessionOrchestrator:
         self._registry = domain_registry
         self._sessions: dict[str, _SessionRecord] = {}
         self._lock = threading.Lock()
+        # Factory: model_name → BaseLMProvider instance
         self._lm_provider_factory = lm_provider_factory
 
     def create_session(self, config: SessionConfig) -> str:
@@ -140,10 +141,11 @@ class SessionOrchestrator:
             )
 
         record.state = SessionState.RUNNING
+        factory = self._lm_provider_factory
 
         def _run() -> None:
             try:
-                self._execute_session(record, lm_provider)
+                self._execute_session(record, lm_provider, factory)
             except Exception as exc:
                 logger.exception("Session %s failed: %s", session_id, exc)
                 record.error = str(exc)
@@ -217,6 +219,7 @@ class SessionOrchestrator:
         self,
         record: _SessionRecord,
         lm_provider: BaseLMProvider | None,
+        lm_provider_factory: LMProviderFactory | None = None,
     ) -> None:
         """Build and execute the agent DAG for a session."""
         config = record.config
@@ -250,13 +253,19 @@ class SessionOrchestrator:
 
         for slot in config.agents:
             role = role_map[slot.role]
+            # Resolve provider: factory(model) > explicit provider > error
+            agent_provider = None
+            if lm_provider_factory is not None:
+                agent_provider = lm_provider_factory(slot.model)
+            elif lm_provider is not None:
+                agent_provider = lm_provider
             task = self._build_agent_task(
                 slot=slot,
                 role=role,
                 pack=pack,
                 event_log=event_log,
                 workspace=workspace,
-                lm_provider=lm_provider,
+                lm_provider=agent_provider,
                 stop_event=record.stop_event,
                 depends_on=[prev_task] if prev_task is not None else [],
             )
@@ -368,5 +377,5 @@ class SessionOrchestrator:
             pass
 
 
-# Type alias for LM provider factory (used for multi-model sessions)
-LMProviderFactory = Any  # Callable[[str], BaseLMProvider] — model_name → provider
+# Type alias for LM provider factory: model_name → BaseLMProvider
+LMProviderFactory = Any  # Callable[[str], BaseLMProvider]

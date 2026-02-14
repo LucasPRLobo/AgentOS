@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 
@@ -22,16 +23,31 @@ from agentplatform.api_schemas import (
 from agentplatform.event_stream import EventStreamer
 from agentplatform.orchestrator import SessionOrchestrator
 
+logger = logging.getLogger(__name__)
+
+
+def _make_ollama_factory(base_url: str = "http://localhost:11434") -> Callable[[str], BaseLMProvider]:
+    """Create a factory that returns an OllamaProvider for each model name."""
+    from labos.providers.ollama import OllamaProvider
+
+    def factory(model_name: str) -> BaseLMProvider:
+        return OllamaProvider(model=model_name, base_url=base_url)
+
+    return factory
+
 
 def create_app(
     *,
     lm_provider: BaseLMProvider | None = None,
+    lm_provider_factory: Callable[[str], BaseLMProvider] | None = None,
     domain_registry: DomainRegistry | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
-        lm_provider: Default LM provider for sessions.
+        lm_provider: Default LM provider for all sessions (single model).
+        lm_provider_factory: Factory model_name → provider (multi-model).
+            If neither is given, auto-detects Ollama on localhost.
         domain_registry: Pre-configured registry (builtins registered if None).
     """
     app = FastAPI(title="AgentOS Platform", version="0.1.0")
@@ -40,10 +56,28 @@ def create_app(
     registry = domain_registry or DomainRegistry()
     if domain_registry is None:
         register_builtin_packs(registry)
-    orchestrator = SessionOrchestrator(registry)
+
+    # Auto-detect Ollama if no provider specified
+    if lm_provider is None and lm_provider_factory is None:
+        try:
+            factory = _make_ollama_factory()
+            # Quick connectivity check
+            test_provider = factory("llama3.2:latest")
+            if hasattr(test_provider, "is_available") and test_provider.is_available():
+                lm_provider_factory = factory
+                logger.info("Auto-detected Ollama at localhost:11434")
+            else:
+                logger.warning(
+                    "Ollama not reachable at localhost:11434. "
+                    "Sessions will fail unless an LM provider is configured."
+                )
+        except ImportError:
+            logger.warning("labos.providers.ollama not available, no auto-detection.")
+
+    orchestrator = SessionOrchestrator(registry, lm_provider_factory=lm_provider_factory)
     streamer = EventStreamer()
 
-    # Store provider for session starts
+    # Store provider for session starts (fallback for direct lm_provider)
     app.state.lm_provider = lm_provider
     app.state.orchestrator = orchestrator
     app.state.registry = registry
