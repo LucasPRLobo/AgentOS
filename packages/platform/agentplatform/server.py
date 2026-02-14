@@ -103,7 +103,7 @@ def create_app(
             with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=5) as resp:
                 data = json.loads(resp.read())
             return [
-                {"name": m["name"], "size": m.get("size", "")}
+                {"name": m["name"], "size": str(m.get("size", ""))}
                 for m in data.get("models", [])
             ]
         except Exception:
