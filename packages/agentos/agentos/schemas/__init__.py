@@ -3,6 +3,7 @@
 from agentos.schemas.artifact import ArtifactMeta
 from agentos.schemas.budget import BudgetDelta, BudgetSpec, BudgetUsage
 from agentos.schemas.events import (
+    AgentMessage,
     AgentStepFinished,
     AgentStepStarted,
     ArtifactCreated,
@@ -19,6 +20,8 @@ from agentos.schemas.events import (
     RLMIterationStarted,
     RunFinished,
     RunStarted,
+    SessionFinished,
+    SessionStarted,
     StopCondition,
     TaskFinished,
     TaskStarted,
@@ -29,6 +32,7 @@ from agentos.schemas.events import (
 from agentos.schemas.tool_call import ToolCallRecord
 
 __all__ = [
+    "AgentMessage",
     "AgentStepFinished",
     "AgentStepStarted",
     "ArtifactCreated",
@@ -49,6 +53,8 @@ __all__ = [
     "RLMIterationStarted",
     "RunFinished",
     "RunStarted",
+    "SessionFinished",
+    "SessionStarted",
     "StopCondition",
     "TaskFinished",
     "TaskStarted",
