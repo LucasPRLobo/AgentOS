@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { createSession, getPack, startSession } from '../api/client';
+import { createSession, getPack, listModels, startSession } from '../api/client';
 import type { AgentSlotConfig, DomainPackDetail } from '../api/types';
 import RoleConfigurator from '../components/RoleConfigurator';
 
@@ -17,6 +17,11 @@ export default function TeamBuilder() {
   const [taskDescription, setTaskDescription] = useState('');
   const [workspaceRoot, setWorkspaceRoot] = useState('/tmp/agentos-session');
   const [launching, setLaunching] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+
+  useEffect(() => {
+    listModels().then((ms) => setModels(ms.map((m) => m.name)));
+  }, []);
 
   useEffect(() => {
     getPack(packName).then((p) => {
@@ -127,6 +132,7 @@ export default function TeamBuilder() {
                   role={role}
                   slot={slot}
                   toolSideEffects={toolSideEffects}
+                  availableModels={models}
                   onUpdate={(s) => updateSlot(i, s)}
                   onRemove={() => removeSlot(i)}
                 />

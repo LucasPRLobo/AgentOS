@@ -314,11 +314,17 @@ class SessionOrchestrator:
                 if tool_name in tool_map:
                     entry = tool_map[tool_name]
                     try:
-                        tool = self._registry.load_tool(entry, workspace=workspace)
-                    except TypeError:
-                        # Tool doesn't need workspace arg
-                        tool = self._registry.load_tool(entry)
-                    registry.register(tool)
+                        try:
+                            tool = self._registry.load_tool(entry, workspace=workspace)
+                        except TypeError:
+                            # Tool doesn't need workspace arg
+                            tool = self._registry.load_tool(entry)
+                        registry.register(tool)
+                    except (ImportError, ModuleNotFoundError) as exc:
+                        logger.warning(
+                            "Skipping tool '%s' for agent '%s': %s",
+                            tool_name, slot.role, exc,
+                        )
 
             rid = generate_run_id()
             bm = BudgetManager(budget_spec, event_log, rid)

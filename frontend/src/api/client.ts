@@ -38,6 +38,12 @@ export async function getPackRoles(name: string): Promise<RoleTemplate[]> {
   return fetchJSON(`/api/packs/${name}/roles`);
 }
 
+// ── Models ────────────────────────────────────────────────────────
+
+export async function listModels(): Promise<{ name: string; size: string }[]> {
+  return fetchJSON('/api/models');
+}
+
 // ── Sessions ────────────────────────────────────────────────────────
 
 export async function createSession(

@@ -49,7 +49,7 @@ _LABOS_ROLES = [
             "experiment_plan.json. Respond with JSON tool calls only."
         ),
         tool_names=["file_write"],
-        suggested_model="llama3.1:latest",
+        suggested_model="llama3.2:latest",
         budget_profile=BudgetSpec(
             max_tokens=10_000, max_tool_calls=5,
             max_time_seconds=60.0, max_recursion_depth=1,
@@ -65,7 +65,7 @@ _LABOS_ROLES = [
             "evaluate the model. Respond with JSON tool calls only."
         ),
         tool_names=["dataset_loader", "python_runner"],
-        suggested_model="llama3.1:latest",
+        suggested_model="llama3.2:latest",
         budget_profile=BudgetSpec(
             max_tokens=20_000, max_tool_calls=10,
             max_time_seconds=120.0, max_recursion_depth=1,
@@ -81,7 +81,7 @@ _LABOS_ROLES = [
             "write analysis notes. Respond with JSON tool calls only."
         ),
         tool_names=["plot_generator", "file_write"],
-        suggested_model="llama3.1:latest",
+        suggested_model="llama3.2:latest",
         budget_profile=BudgetSpec(
             max_tokens=15_000, max_tool_calls=10,
             max_time_seconds=90.0, max_recursion_depth=1,
@@ -97,7 +97,7 @@ _LABOS_ROLES = [
             "summarizing the experiment findings. Respond with JSON tool calls only."
         ),
         tool_names=["file_read", "file_write"],
-        suggested_model="llama3.1:latest",
+        suggested_model="llama3.2:latest",
         budget_profile=BudgetSpec(
             max_tokens=20_000, max_tool_calls=10,
             max_time_seconds=90.0, max_recursion_depth=1,
@@ -113,7 +113,7 @@ _LABOS_ROLES = [
             "entire experiment pipeline. Respond with JSON tool calls only."
         ),
         tool_names=["reviewer"],
-        suggested_model="llama3.1:latest",
+        suggested_model="llama3.2:latest",
         budget_profile=BudgetSpec(
             max_tokens=10_000, max_tool_calls=5,
             max_time_seconds=60.0, max_recursion_depth=1,
@@ -204,7 +204,7 @@ _CODEOS_ROLES = [
             "to implement the requested changes. Respond with JSON tool calls only."
         ),
         tool_names=["file_read", "file_write", "grep", "run_command"],
-        suggested_model="llama3.1:latest",
+        suggested_model="llama3.2:latest",
         budget_profile=BudgetSpec(
             max_tokens=50_000, max_tool_calls=30,
             max_time_seconds=300.0, max_recursion_depth=1,
@@ -220,7 +220,7 @@ _CODEOS_ROLES = [
             "detailed review feedback. Respond with JSON tool calls only."
         ),
         tool_names=["file_read", "grep", "git_diff"],
-        suggested_model="llama3.1:latest",
+        suggested_model="llama3.2:latest",
         budget_profile=BudgetSpec(
             max_tokens=30_000, max_tool_calls=20,
             max_time_seconds=120.0, max_recursion_depth=1,
@@ -237,7 +237,7 @@ _CODEOS_ROLES = [
             "Respond with JSON tool calls only."
         ),
         tool_names=["file_read", "grep", "git_status"],
-        suggested_model="llama3.1:latest",
+        suggested_model="llama3.2:latest",
         budget_profile=BudgetSpec(
             max_tokens=30_000, max_tool_calls=15,
             max_time_seconds=120.0, max_recursion_depth=1,

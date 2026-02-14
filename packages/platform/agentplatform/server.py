@@ -92,6 +92,23 @@ def create_app(
     app.state.registry = registry
     app.state.streamer = streamer
 
+    # ── Models Endpoint ─────────────────────────────────────────────
+
+    @app.get("/api/models")
+    def list_models() -> list[dict[str, str]]:
+        """List available LLM models from the configured provider (Ollama)."""
+        import json
+        import urllib.request
+        try:
+            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=5) as resp:
+                data = json.loads(resp.read())
+            return [
+                {"name": m["name"], "size": m.get("size", "")}
+                for m in data.get("models", [])
+            ]
+        except Exception:
+            return []
+
     # ── Domain Pack Endpoints ────────────────────────────────────────
 
     @app.get("/api/packs", response_model=list[DomainPackSummaryResponse])

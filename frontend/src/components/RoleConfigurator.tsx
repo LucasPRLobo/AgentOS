@@ -7,6 +7,7 @@ interface Props {
   role: RoleTemplate;
   slot: AgentSlotConfig;
   toolSideEffects: Record<string, string>;
+  availableModels: string[];
   onUpdate: (slot: AgentSlotConfig) => void;
   onRemove: () => void;
 }
@@ -15,6 +16,7 @@ export default function RoleConfigurator({
   role,
   slot,
   toolSideEffects,
+  availableModels,
   onUpdate,
   onRemove,
 }: Props) {
@@ -42,12 +44,19 @@ export default function RoleConfigurator({
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block text-xs text-gray-400 mb-1">LLM Model</label>
-          <input
-            type="text"
+          <select
             value={slot.model}
             onChange={(e) => onUpdate({ ...slot, model: e.target.value })}
             className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-blue-500"
-          />
+          >
+            {availableModels.length > 0 ? (
+              availableModels.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))
+            ) : (
+              <option value={slot.model}>{slot.model}</option>
+            )}
+          </select>
         </div>
         <div>
           <label className="block text-xs text-gray-400 mb-1">Instances</label>
