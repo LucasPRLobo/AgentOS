@@ -88,3 +88,62 @@ class ErrorResponse(BaseModel):
     """Standard error response."""
 
     detail: str
+
+
+# ── Settings ───────────────────────────────────────────────────────
+
+
+class UpdateSettingsRequest(BaseModel):
+    """Request body for PUT /api/settings. All fields optional."""
+
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    ollama_base_url: str | None = None
+    managed_proxy_url: str | None = None
+    managed_proxy_key: str | None = None
+    default_model: str | None = None
+    workspace_dir: str | None = None
+    workflows_dir: str | None = None
+    google_oauth_token: str | None = None
+    slack_bot_token: str | None = None
+
+
+class SettingsResponse(BaseModel):
+    """Platform settings (API keys masked)."""
+
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    ollama_base_url: str = ""
+    managed_proxy_url: str | None = None
+    managed_proxy_key: str | None = None
+    default_model: str = ""
+    workspace_dir: str = ""
+    workflows_dir: str = ""
+    google_oauth_token: str | None = None
+    slack_bot_token: str | None = None
+
+
+# ── Models ─────────────────────────────────────────────────────────
+
+
+class ModelListEntry(BaseModel):
+    """A single model in the available models list."""
+
+    name: str
+    provider: str
+    display_name: str
+    available: bool = True
+
+
+class ModelCapabilitiesResponse(BaseModel):
+    """Capabilities for a specific model."""
+
+    context_window: int = 0
+    max_output_tokens: int = 0
+    supports_structured_output: bool = False
+    supports_tool_use: bool = False
+    supports_vision: bool = False
+    cost_per_1k_input: float = 0.0
+    cost_per_1k_output: float = 0.0
+    provider: str = ""
+    display_name: str = ""
