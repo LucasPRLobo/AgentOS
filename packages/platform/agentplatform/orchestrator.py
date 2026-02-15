@@ -51,6 +51,7 @@ class _SessionRecord:
         "thread",
         "stop_event",
         "error",
+        "_workflow",
     )
 
     def __init__(self, config: SessionConfig, event_log: EventLog, run_id: RunId) -> None:
@@ -62,6 +63,7 @@ class _SessionRecord:
         self.thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.error: str | None = None
+        self._workflow: Any = None
 
 
 class SessionOrchestrator:
@@ -206,6 +208,145 @@ class SessionOrchestrator:
             "event_count": len(events),
             "error": record.error,
         }
+
+    def create_session_from_workflow(
+        self,
+        workflow: "WorkflowDefinition",
+        task_description: str = "",
+    ) -> str:
+        """Create and prepare a session from a WorkflowDefinition.
+
+        Unlike ``create_session()``, this stores the workflow directly and
+        skips domain-pack role validation since the workflow defines its own
+        node configurations.
+
+        Returns the session_id.
+        """
+        from agentos.schemas.workflow import WorkflowDefinition as _WD
+
+        # Create event log and workspace
+        workspace_root = self._resolve_workspace(workflow.id)
+        Path(workspace_root).mkdir(parents=True, exist_ok=True)
+        event_log = SQLiteEventLog(str(Path(workspace_root) / "events.db"))
+        run_id = generate_run_id()
+
+        # Build a lightweight SessionConfig for record-keeping
+        config = SessionConfig(
+            domain_pack=workflow.domain_pack or "custom",
+            workflow=workflow.name,
+            agents=[
+                AgentSlotConfig(
+                    role=node.role,
+                    model=node.config.model,
+                    count=1,
+                )
+                for node in workflow.nodes
+            ],
+            workspace_root=workspace_root,
+            task_description=task_description,
+        )
+
+        record = _SessionRecord(config, event_log, run_id)
+        # Store the workflow on the record for compilation during start
+        record._workflow = workflow
+
+        with self._lock:
+            self._sessions[config.session_id] = record
+
+        return config.session_id
+
+    def start_workflow_session(
+        self,
+        session_id: str,
+    ) -> None:
+        """Start a workflow-based session in a background thread."""
+        record = self._get_record(session_id)
+        if record.state != SessionState.CREATED:
+            raise RuntimeError(
+                f"Session '{session_id}' is in state {record.state}, expected CREATED"
+            )
+
+        workflow = getattr(record, "_workflow", None)
+        if workflow is None:
+            raise RuntimeError(
+                f"Session '{session_id}' was not created from a workflow"
+            )
+
+        record.state = SessionState.RUNNING
+        factory = self._lm_provider_factory
+
+        def _run() -> None:
+            try:
+                self._execute_workflow_session(record, workflow, factory)
+            except Exception as exc:
+                logger.exception("Workflow session %s failed: %s", session_id, exc)
+                record.error = str(exc)
+                record.state = SessionState.FAILED
+                self._emit_session_finished(record, "FAILED")
+
+        record.thread = threading.Thread(target=_run, daemon=True)
+        record.thread.start()
+
+    def _execute_workflow_session(
+        self,
+        record: _SessionRecord,
+        workflow: "WorkflowDefinition",
+        lm_provider_factory: LMProviderFactory | None,
+    ) -> None:
+        """Build and execute a DAG from a WorkflowDefinition."""
+        from agentplatform.workflow_compiler import compile_workflow
+
+        config = record.config
+        event_log = record.event_log
+        run_id = record.run_id
+
+        # Emit SessionStarted
+        event_log.append(
+            SessionStarted(
+                run_id=run_id,
+                seq=0,
+                payload={
+                    "session_id": config.session_id,
+                    "workflow_name": workflow.name,
+                    "node_count": len(workflow.nodes),
+                },
+            )
+        )
+
+        workspace = Workspace(
+            WorkspaceConfig(root=config.workspace_root, allowed_patterns=["**"])
+        )
+
+        if lm_provider_factory is None:
+            raise RuntimeError("No LM provider factory configured")
+
+        dag = compile_workflow(
+            workflow,
+            domain_registry=self._registry,
+            event_log=event_log,
+            workspace=workspace,
+            provider_factory=lm_provider_factory,
+            run_id=run_id,
+            stop_event=record.stop_event,
+        )
+
+        executor = DAGExecutor(event_log, max_parallel=config.max_parallel)
+        dag_run_id = generate_run_id()
+
+        try:
+            executor.run(dag, run_id=dag_run_id)
+            record.state = SessionState.SUCCEEDED
+            self._emit_session_finished(record, "SUCCEEDED")
+        except TaskExecutionError as exc:
+            record.error = str(exc)
+            record.state = SessionState.FAILED
+            self._emit_session_finished(record, "FAILED")
+
+    def _resolve_workspace(self, workflow_id: str) -> str:
+        """Build a workspace directory path for a workflow session."""
+        import os
+        base = os.path.expanduser("~/.agentos/workspaces")
+        return os.path.join(base, f"wf-{workflow_id[:12]}")
 
     # ── Private ──────────────────────────────────────────────────────
 
