@@ -31,6 +31,12 @@ class EventType(StrEnum):
     LM_CALL_FINISHED = "LMCallFinished"
     REPL_EXEC_STARTED = "REPLExecStarted"
     REPL_EXEC_FINISHED = "REPLExecFinished"
+    AGENT_STEP_STARTED = "AgentStepStarted"
+    AGENT_STEP_FINISHED = "AgentStepFinished"
+    WORKSPACE_SNAPSHOT = "WorkspaceSnapshot"
+    SESSION_STARTED = "SessionStarted"
+    SESSION_FINISHED = "SessionFinished"
+    AGENT_MESSAGE = "AgentMessage"
 
 
 def _utc_now() -> datetime:
@@ -147,3 +153,46 @@ class REPLExecFinished(BaseEvent):
     """Emitted when REPL code execution completes."""
 
     event_type: EventType = EventType.REPL_EXEC_FINISHED
+
+
+class AgentStepStarted(BaseEvent):
+    """Emitted when an agent step begins."""
+
+    event_type: EventType = EventType.AGENT_STEP_STARTED
+
+
+class AgentStepFinished(BaseEvent):
+    """Emitted when an agent step completes."""
+
+    event_type: EventType = EventType.AGENT_STEP_FINISHED
+
+
+class WorkspaceSnapshot(BaseEvent):
+    """Emitted to capture workspace state at run start/end."""
+
+    event_type: EventType = EventType.WORKSPACE_SNAPSHOT
+
+
+class SessionStarted(BaseEvent):
+    """Emitted when a multi-agent session begins."""
+
+    event_type: EventType = EventType.SESSION_STARTED
+
+
+class SessionFinished(BaseEvent):
+    """Emitted when a multi-agent session completes."""
+
+    event_type: EventType = EventType.SESSION_FINISHED
+
+
+class AgentMessage(BaseEvent):
+    """Inter-agent message routed through the event log.
+
+    Payload convention:
+        from_agent: str — name of the sending agent
+        to_agent: str | None — target agent (None for broadcast)
+        topic: str — message topic / channel
+        content: str — message body
+    """
+
+    event_type: EventType = EventType.AGENT_MESSAGE

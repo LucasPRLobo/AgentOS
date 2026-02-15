@@ -78,21 +78,23 @@ class SQLiteEventLog(EventLog):
 
     def query_by_run(self, run_id: RunId) -> list[BaseEvent]:
         """Return all events for a run, ordered by sequence number."""
-        cursor = self._conn.execute(
-            "SELECT run_id, seq, timestamp, event_type, payload_json "
-            "FROM events WHERE run_id = ? ORDER BY seq",
-            (run_id,),
-        )
-        return self._rows_to_events(cursor.fetchall())
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT run_id, seq, timestamp, event_type, payload_json "
+                "FROM events WHERE run_id = ? ORDER BY seq",
+                (run_id,),
+            )
+            return self._rows_to_events(cursor.fetchall())
 
     def query_by_type(self, run_id: RunId, event_type: EventType) -> list[BaseEvent]:
         """Return events of a specific type for a run."""
-        cursor = self._conn.execute(
-            "SELECT run_id, seq, timestamp, event_type, payload_json "
-            "FROM events WHERE run_id = ? AND event_type = ? ORDER BY seq",
-            (run_id, event_type.value),
-        )
-        return self._rows_to_events(cursor.fetchall())
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT run_id, seq, timestamp, event_type, payload_json "
+                "FROM events WHERE run_id = ? AND event_type = ? ORDER BY seq",
+                (run_id, event_type.value),
+            )
+            return self._rows_to_events(cursor.fetchall())
 
     def replay(self, run_id: RunId) -> list[BaseEvent]:
         """Return full ordered event stream for deterministic replay."""
