@@ -24,6 +24,8 @@ from agentplatform.api_schemas import (
     DomainPackDetailResponse,
     DomainPackSummaryResponse,
     EventResponse,
+    GenerateWorkflowRequest,
+    GenerateWorkflowResponse,
     IntegrationStatusResponse,
     ModelCapabilitiesResponse,
     ModelListEntry,
@@ -32,6 +34,7 @@ from agentplatform.api_schemas import (
     SessionDetailResponse,
     SessionSummaryResponse,
     SettingsResponse,
+    TemplateSummaryResponse,
     UpdateSettingsRequest,
     WorkflowSummaryResponse,
     WorkflowValidationResponse,
@@ -39,6 +42,7 @@ from agentplatform.api_schemas import (
 from agentplatform.event_stream import EventStreamer
 from agentplatform.orchestrator import SessionOrchestrator
 from agentplatform.settings import PlatformSettings, SettingsManager
+from agentplatform.template_store import TemplateStore
 from agentplatform.workflow_store import WorkflowStore
 
 logger = logging.getLogger(__name__)
@@ -147,8 +151,9 @@ def create_app(
     sm = settings_manager or SettingsManager()
     settings = sm.load()
 
-    # Initialize workflow store
+    # Initialize workflow store and template store
     wf_store = WorkflowStore(settings.workflows_dir)
+    tpl_store = TemplateStore()
 
     # Initialize registry and orchestrator
     registry = domain_registry or DomainRegistry()
@@ -395,6 +400,86 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(e))
 
         return {"session_id": sid, "state": "RUNNING"}
+
+    # ── Template Endpoints ──────────────────────────────────────────
+
+    @app.get("/api/templates", response_model=list[TemplateSummaryResponse])
+    def list_templates(domain_pack: str | None = None) -> list[dict[str, Any]]:
+        """List available workflow templates."""
+        return [s.model_dump() for s in tpl_store.list(domain_pack=domain_pack)]
+
+    @app.get("/api/templates/{template_id}")
+    def get_template(template_id: str) -> Any:
+        """Get a workflow template definition by ID."""
+        try:
+            return tpl_store.get(template_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail=f"Template '{template_id}' not found"
+            )
+
+    @app.post("/api/templates/{template_id}/instantiate", response_model=WorkflowSummaryResponse)
+    def instantiate_template(template_id: str) -> dict[str, Any]:
+        """Clone a template into a new editable workflow."""
+        try:
+            tpl = tpl_store.get(template_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail=f"Template '{template_id}' not found"
+            )
+
+        from datetime import UTC, datetime
+
+        from agentos.core.identifiers import generate_run_id
+
+        now = datetime.now(UTC).isoformat()
+        cloned = tpl.model_copy(update={
+            "id": str(generate_run_id()),
+            "name": f"{tpl.name} (from template)",
+            "created_at": now,
+            "updated_at": now,
+            "template_source": template_id,
+        })
+        wf_store.save(cloned)
+        return {
+            "id": cloned.id,
+            "name": cloned.name,
+            "description": cloned.description,
+            "version": cloned.version,
+            "node_count": len(cloned.nodes),
+            "edge_count": len(cloned.edges),
+            "domain_pack": cloned.domain_pack,
+            "created_at": cloned.created_at,
+            "updated_at": cloned.updated_at,
+            "template_source": cloned.template_source,
+        }
+
+    # ── NL Workflow Generation ─────────────────────────────────────
+
+    @app.post("/api/workflows/generate", response_model=GenerateWorkflowResponse)
+    def generate_workflow(request: GenerateWorkflowRequest) -> dict[str, Any]:
+        """Generate a workflow from a natural language description."""
+        from agentplatform.nl_generator import WorkflowGenerator
+
+        try:
+            assert lm_provider_factory is not None, (
+                "No LLM provider configured. Set an API key in Settings."
+            )
+            generator = WorkflowGenerator(
+                provider_factory=lm_provider_factory,
+                registry=registry,
+            )
+            wf, explanation = generator.generate(
+                description=request.description,
+                model=request.model,
+            )
+            return {
+                "workflow": json.loads(wf.model_dump_json()),
+                "explanation": explanation,
+            }
+        except Exception as exc:
+            logger.exception("NL generation failed")
+            raise HTTPException(status_code=500, detail=str(exc))
 
     # ── Domain Pack Endpoints ────────────────────────────────────────
 

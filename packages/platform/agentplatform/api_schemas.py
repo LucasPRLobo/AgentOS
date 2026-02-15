@@ -203,3 +203,36 @@ class ConnectSlackRequest(BaseModel):
     """Request body for POST /api/integrations/slack/connect."""
 
     bot_token: str
+
+
+# ── Templates ─────────────────────────────────────────────────────
+
+
+class TemplateSummaryResponse(BaseModel):
+    """Summary for template listings."""
+
+    id: str
+    name: str
+    description: str = ""
+    category: str = ""
+    agent_count: int = 0
+    estimated_cost: str = ""
+    domain_pack: str = ""
+    tags: list[str] = []
+
+
+# ── NL Generator ──────────────────────────────────────────────────
+
+
+class GenerateWorkflowRequest(BaseModel):
+    """Request body for POST /api/workflows/generate."""
+
+    description: str
+    model: str = "gpt-4o-mini"
+
+
+class GenerateWorkflowResponse(BaseModel):
+    """Response for POST /api/workflows/generate."""
+
+    workflow: dict
+    explanation: str = ""
