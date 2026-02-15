@@ -147,3 +147,42 @@ class ModelCapabilitiesResponse(BaseModel):
     cost_per_1k_output: float = 0.0
     provider: str = ""
     display_name: str = ""
+
+
+# ── Workflows ──────────────────────────────────────────────────────
+
+
+class WorkflowSummaryResponse(BaseModel):
+    """Summary for workflow listings."""
+
+    id: str
+    name: str
+    description: str = ""
+    version: str = "1.0.0"
+    node_count: int = 0
+    edge_count: int = 0
+    domain_pack: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    template_source: str | None = None
+
+
+class RunWorkflowRequest(BaseModel):
+    """Request body for POST /api/workflows/:id/run."""
+
+    task_description: str = ""
+    max_parallel: int = 1
+
+
+class RunWorkflowResponse(BaseModel):
+    """Response for POST /api/workflows/:id/run."""
+
+    session_id: str
+    state: str
+
+
+class WorkflowValidationResponse(BaseModel):
+    """Response for POST /api/workflows/:id/validate."""
+
+    valid: bool
+    issues: list[dict] = Field(default_factory=list)

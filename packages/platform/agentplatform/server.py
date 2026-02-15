@@ -15,6 +15,7 @@ from agentos.lm import model_registry
 from agentos.lm.provider import BaseLMProvider, ModelCapabilities
 from agentos.runtime.domain_registry import DomainRegistry
 from agentos.schemas.session import AgentSlotConfig, SessionConfig
+from agentos.schemas.workflow import WorkflowDefinition
 
 from agentplatform._domain_manifests import register_builtin_packs
 from agentplatform.api_schemas import (
@@ -24,14 +25,19 @@ from agentplatform.api_schemas import (
     EventResponse,
     ModelCapabilitiesResponse,
     ModelListEntry,
+    RunWorkflowRequest,
+    RunWorkflowResponse,
     SessionDetailResponse,
     SessionSummaryResponse,
     SettingsResponse,
     UpdateSettingsRequest,
+    WorkflowSummaryResponse,
+    WorkflowValidationResponse,
 )
 from agentplatform.event_stream import EventStreamer
 from agentplatform.orchestrator import SessionOrchestrator
 from agentplatform.settings import PlatformSettings, SettingsManager
+from agentplatform.workflow_store import WorkflowStore
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +145,9 @@ def create_app(
     sm = settings_manager or SettingsManager()
     settings = sm.load()
 
+    # Initialize workflow store
+    wf_store = WorkflowStore(settings.workflows_dir)
+
     # Initialize registry and orchestrator
     registry = domain_registry or DomainRegistry()
     if domain_registry is None:
@@ -244,6 +253,146 @@ def create_app(
                 detail=f"No capability data for model '{model_name}'",
             )
         return asdict(caps)
+
+    # ── Workflow Endpoints ─────────────────────────────────────────────
+
+    @app.post("/api/workflows", response_model=WorkflowSummaryResponse, status_code=201)
+    def save_workflow(workflow: WorkflowDefinition) -> dict[str, Any]:
+        """Save a workflow definition."""
+        from agentos.schemas.workflow import WorkflowDefinition as _WD
+
+        wf_store.save(workflow)
+        return {
+            "id": workflow.id,
+            "name": workflow.name,
+            "description": workflow.description,
+            "version": workflow.version,
+            "node_count": len(workflow.nodes),
+            "edge_count": len(workflow.edges),
+            "domain_pack": workflow.domain_pack,
+            "created_at": workflow.created_at,
+            "updated_at": workflow.updated_at,
+            "template_source": workflow.template_source,
+        }
+
+    @app.get("/api/workflows", response_model=list[WorkflowSummaryResponse])
+    def list_workflows() -> list[dict[str, Any]]:
+        """List all saved workflows."""
+        return [s.model_dump() for s in wf_store.list()]
+
+    @app.get("/api/workflows/{workflow_id}")
+    def get_workflow(workflow_id: str) -> Any:
+        """Get a workflow definition by ID."""
+        try:
+            return wf_store.load(workflow_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404, detail=f"Workflow '{workflow_id}' not found"
+            )
+
+    @app.put("/api/workflows/{workflow_id}", response_model=WorkflowSummaryResponse)
+    def update_workflow(workflow_id: str, workflow: WorkflowDefinition) -> dict[str, Any]:
+        """Update an existing workflow."""
+        from agentos.schemas.workflow import WorkflowDefinition as _WD
+
+        if not wf_store.exists(workflow_id):
+            raise HTTPException(
+                status_code=404, detail=f"Workflow '{workflow_id}' not found"
+            )
+        # Ensure the ID matches the URL
+        updated = workflow.model_copy(update={"id": workflow_id})
+        wf_store.save(updated)
+        return {
+            "id": updated.id,
+            "name": updated.name,
+            "description": updated.description,
+            "version": updated.version,
+            "node_count": len(updated.nodes),
+            "edge_count": len(updated.edges),
+            "domain_pack": updated.domain_pack,
+            "created_at": updated.created_at,
+            "updated_at": updated.updated_at,
+            "template_source": updated.template_source,
+        }
+
+    @app.delete("/api/workflows/{workflow_id}", status_code=204)
+    def delete_workflow(workflow_id: str) -> None:
+        """Delete a workflow."""
+        try:
+            wf_store.delete(workflow_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404, detail=f"Workflow '{workflow_id}' not found"
+            )
+
+    @app.post("/api/workflows/{workflow_id}/clone", response_model=WorkflowSummaryResponse)
+    def clone_workflow(workflow_id: str) -> dict[str, Any]:
+        """Clone a workflow with a new ID."""
+        try:
+            cloned = wf_store.clone(workflow_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404, detail=f"Workflow '{workflow_id}' not found"
+            )
+        return {
+            "id": cloned.id,
+            "name": cloned.name,
+            "description": cloned.description,
+            "version": cloned.version,
+            "node_count": len(cloned.nodes),
+            "edge_count": len(cloned.edges),
+            "domain_pack": cloned.domain_pack,
+            "created_at": cloned.created_at,
+            "updated_at": cloned.updated_at,
+            "template_source": cloned.template_source,
+        }
+
+    @app.post("/api/workflows/{workflow_id}/validate", response_model=WorkflowValidationResponse)
+    def validate_workflow_endpoint(workflow_id: str) -> dict[str, Any]:
+        """Validate a workflow definition."""
+        from agentos.runtime.workflow_validator import validate_workflow
+
+        try:
+            workflow = wf_store.load(workflow_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404, detail=f"Workflow '{workflow_id}' not found"
+            )
+
+        # Gather available tools and models
+        available_tools: set[str] = set()
+        if workflow.domain_pack and registry.has_pack(workflow.domain_pack):
+            pack = registry.get_pack(workflow.domain_pack)
+            available_tools = {t.name for t in pack.tools}
+
+        issues = validate_workflow(
+            workflow,
+            available_tools=available_tools,
+        )
+        return {
+            "valid": all(i.severity != "error" for i in issues),
+            "issues": [i.model_dump() for i in issues],
+        }
+
+    @app.post("/api/workflows/{workflow_id}/run", response_model=RunWorkflowResponse)
+    def run_workflow(workflow_id: str, request: RunWorkflowRequest) -> dict[str, Any]:
+        """Compile a workflow into a session and start execution."""
+        try:
+            workflow = wf_store.load(workflow_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404, detail=f"Workflow '{workflow_id}' not found"
+            )
+
+        try:
+            sid = orchestrator.create_session_from_workflow(
+                workflow, task_description=request.task_description
+            )
+            orchestrator.start_workflow_session(sid)
+        except RuntimeError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+
+        return {"session_id": sid, "state": "RUNNING"}
 
     # ── Domain Pack Endpoints ────────────────────────────────────────
 
