@@ -29,7 +29,7 @@ class TestListPacks:
         data = resp.json()
         labos = next(p for p in data if p["name"] == "labos")
         assert labos["display_name"] == "Lab Research OS"
-        assert labos["tool_count"] == 4
+        assert labos["tool_count"] == 18  # 4 domain + 14 platform tools
         assert labos["role_count"] == 5
         assert labos["workflow_count"] == 2
 
@@ -41,7 +41,7 @@ class TestGetPack:
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "labos"
-        assert len(data["tools"]) == 4
+        assert len(data["tools"]) == 18  # 4 domain + 14 platform tools
         assert len(data["role_templates"]) == 5
         tool_names = {t["name"] for t in data["tools"]}
         assert "dataset_loader" in tool_names
@@ -51,7 +51,7 @@ class TestGetPack:
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "codeos"
-        assert len(data["tools"]) == 7
+        assert len(data["tools"]) == 21  # 7 domain + 14 platform tools
 
     def test_unknown_pack_404(self, client: TestClient) -> None:
         resp = client.get("/api/packs/nonexistent")
