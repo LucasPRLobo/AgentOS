@@ -105,6 +105,7 @@ export default function Toolbar({
       <button
         onClick={handleSave}
         disabled={saving}
+        title="Save (Ctrl+S)"
         className="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300
                    border border-gray-700 hover:border-blue-500 hover:text-blue-300
                    transition-colors disabled:opacity-50"

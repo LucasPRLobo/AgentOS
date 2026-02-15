@@ -28,11 +28,11 @@ function NavLink({ to, label }: { to: string; label: string }) {
 export default function App() {
   return (
     <div className="min-h-screen">
-      <header className="border-b border-gray-800 px-6 py-4 flex items-center gap-8">
-        <Link to="/" className="text-xl font-bold text-white hover:text-blue-400 transition-colors">
+      <header className="border-b border-gray-800 px-4 sm:px-6 py-4 flex flex-wrap items-center gap-4 sm:gap-8">
+        <Link to="/" className="text-lg sm:text-xl font-bold text-white hover:text-blue-400 transition-colors">
           AgentOS Platform
         </Link>
-        <nav className="flex items-center gap-6">
+        <nav className="flex items-center gap-4 sm:gap-6">
           <NavLink to="/" label="Home" />
           <NavLink to="/sessions" label="Sessions" />
           <NavLink to="/settings" label="Settings" />
