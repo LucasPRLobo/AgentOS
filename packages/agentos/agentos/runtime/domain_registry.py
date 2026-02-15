@@ -97,10 +97,26 @@ class DomainRegistry:
     def load_tool(self, entry: ToolManifestEntry, **kwargs: Any) -> BaseTool:
         """Dynamically import and instantiate a tool from its manifest entry.
 
-        Additional keyword arguments are passed to the tool constructor.
+        Additional keyword arguments are passed to the tool constructor
+        only if the constructor accepts them (via introspection).
         """
+        import inspect
+
         tool_class = _import_from_path(entry.factory)
-        return tool_class(**kwargs)
+
+        # Filter kwargs to only those accepted by the constructor
+        sig = inspect.signature(tool_class.__init__)
+        params = sig.parameters
+        accepts_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+        if accepts_var_keyword:
+            filtered = kwargs
+        else:
+            accepted = {name for name, p in params.items() if name != "self"}
+            filtered = {k: v for k, v in kwargs.items() if k in accepted}
+
+        return tool_class(**filtered)
 
     def get_role_template(self, pack_name: str, role_name: str) -> RoleTemplate:
         """Look up a role template by pack and role name.

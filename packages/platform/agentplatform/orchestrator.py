@@ -170,13 +170,18 @@ class SessionOrchestrator:
         return self._get_record(session_id).state
 
     def get_session_events(
-        self, session_id: str, *, after_seq: int = 0
+        self, session_id: str, *, offset: int = 0
     ) -> list[BaseEvent]:
-        """Return events for the session, optionally after a sequence number."""
+        """Return all events for the session (across all agent run_ids).
+
+        Uses offset-based pagination: skip the first ``offset`` events.
+        This works correctly with multiple run_ids that have independent
+        sequence counters.
+        """
         record = self._get_record(session_id)
-        all_events = record.event_log.replay(record.run_id)
-        if after_seq > 0:
-            return [e for e in all_events if e.seq >= after_seq]
+        all_events = record.event_log.query_all()
+        if offset > 0:
+            return all_events[offset:]
         return all_events
 
     def list_sessions(self) -> list[dict[str, Any]]:
@@ -197,7 +202,7 @@ class SessionOrchestrator:
     def get_session_info(self, session_id: str) -> dict[str, Any]:
         """Return detailed info for a session."""
         record = self._get_record(session_id)
-        events = record.event_log.replay(record.run_id)
+        all_events = record.event_log.query_all()
         return {
             "session_id": session_id,
             "state": record.state.value,
@@ -205,7 +210,7 @@ class SessionOrchestrator:
             "workflow": record.config.workflow,
             "created_at": record.created_at,
             "agents": [s.model_dump() for s in record.config.agents],
-            "event_count": len(events),
+            "event_count": len(all_events),
             "error": record.error,
         }
 
@@ -328,6 +333,7 @@ class SessionOrchestrator:
             provider_factory=lm_provider_factory,
             run_id=run_id,
             stop_event=record.stop_event,
+            task_description=config.task_description,
         )
 
         executor = DAGExecutor(event_log, max_parallel=config.max_parallel)

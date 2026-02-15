@@ -48,6 +48,7 @@ def compile_workflow(
     provider_factory: Callable[[str], BaseLMProvider],
     run_id: RunId | None = None,
     stop_event: threading.Event | None = None,
+    task_description: str = "",
 ) -> DAGWorkflow:
     """Compile a visual workflow definition into an executable DAG.
 
@@ -61,8 +62,13 @@ def compile_workflow(
     """
     rid = run_id or generate_run_id()
 
+    # Build workflow-level context from variables and task_description
+    workflow_context = _build_workflow_context(workflow, task_description)
+
     # Build node lookup and tool registry per node
     node_map: dict[str, TaskNode] = {}
+    # Map workflow node IDs → display names for context in output chaining
+    node_names: dict[str, str] = {n.id: n.display_name for n in workflow.nodes}
 
     # Resolve dependencies: target → [source node IDs]
     deps: dict[str, list[str]] = {node.id: [] for node in workflow.nodes}
@@ -115,35 +121,58 @@ def compile_workflow(
             budget_manager=budget_manager,
         )
 
-        # Build the task description from the workflow context
-        task_description = (
-            f"You are the '{wf_node.display_name}' agent in a multi-agent workflow. "
-            f"Your role: {wf_node.role}."
-        )
-
-        # Capture in closure for the callable
-        _runner = runner
-        _config = agent_config
-        _rid = rid
-        _desc = task_description
-
-        def make_callable(
-            r: AgentRunner = _runner,
-            c: AgentConfig = _config,
-            run: RunId = _rid,
-            d: str = _desc,
-        ) -> Callable[[], Any]:
-            def run_agent() -> str | None:
-                _, result = r.run(d, run_id=run, config=c)
-                return result
-            return run_agent
-
         # Resolve dependency TaskNodes
         dep_tasks = [
             node_map[dep_id]
             for dep_id in deps[wf_node.id]
             if dep_id in node_map
         ]
+
+        # Build the static portion of the task description
+        static_desc = (
+            f"You are the '{wf_node.display_name}' agent in a multi-agent workflow.\n\n"
+            f"{workflow_context}\n\n"
+            "IMPORTANT: Do NOT ask for clarification or additional information. "
+            "Work with whatever context you have and produce your best output. "
+            "Other agents downstream depend on your output."
+        )
+
+        # Capture in closure — dep_tasks gives runtime access to predecessor results
+        _runner = runner
+        _config = agent_config
+        _static_desc = static_desc
+        _dep_tasks = list(dep_tasks)  # snapshot
+        _dep_names = {id(node_map[did]): node_names[did] for did in deps[wf_node.id] if did in node_map}
+
+        def make_callable(
+            r: AgentRunner = _runner,
+            c: AgentConfig = _config,
+            sd: str = _static_desc,
+            dt: list[TaskNode] = _dep_tasks,
+            dn: dict[int, str] = _dep_names,
+        ) -> Callable[[], Any]:
+            def run_agent() -> str | None:
+                # Build full task description at runtime, including predecessor outputs
+                parts = [sd]
+                if dt:
+                    parts.append(
+                        "IMPORTANT: The output from the previous agent(s) is provided below. "
+                        "Use this content directly as your input — do NOT ask for more "
+                        "information or clarification. Work with what you have been given."
+                    )
+                    for dep in dt:
+                        if dep.result:
+                            dep_name = dn.get(id(dep), dep.name)
+                            parts.append(
+                                f"=== Output from '{dep_name}' ===\n"
+                                f"{dep.result}\n"
+                                f"=== End of '{dep_name}' output ==="
+                            )
+                full_desc = "\n\n".join(parts)
+                agent_run_id = generate_run_id()
+                _, result = r.run(full_desc, run_id=agent_run_id, config=c)
+                return result
+            return run_agent
 
         task_node = TaskNode(
             name=wf_node.display_name,
@@ -157,6 +186,24 @@ def compile_workflow(
         tasks=list(node_map.values()),
     )
     return dag
+
+
+def _build_workflow_context(workflow: WorkflowDefinition, task_description: str) -> str:
+    """Build workflow-level context string from variables and task description."""
+    parts: list[str] = []
+
+    if task_description:
+        parts.append(f"Task: {task_description}")
+
+    # Include workflow variables with their values (defaults)
+    var_lines = []
+    for var in workflow.variables:
+        if var.default:
+            var_lines.append(f"- {var.name}: {var.default}")
+    if var_lines:
+        parts.append("Workflow parameters:\n" + "\n".join(var_lines))
+
+    return "\n\n".join(parts)
 
 
 def _build_system_prompt(user_prompt: str, persona_preset: str) -> str:

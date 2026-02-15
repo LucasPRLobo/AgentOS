@@ -142,7 +142,7 @@ class TestSessionLifecycle:
         resp = client.get("/api/sessions/nonexistent-id")
         assert resp.status_code == 404
 
-    def test_events_with_after_seq(self, client: TestClient, workspace_root: str) -> None:
+    def test_events_with_offset(self, client: TestClient, workspace_root: str) -> None:
         create_resp = client.post("/api/sessions", json={
             "domain_pack": "labos",
             "workflow": "multi_agent_research",
@@ -155,5 +155,5 @@ class TestSessionLifecycle:
 
         all_events = client.get(f"/api/sessions/{sid}/events").json()
         if len(all_events) > 1:
-            filtered = client.get(f"/api/sessions/{sid}/events?after_seq=1").json()
-            assert len(filtered) < len(all_events)
+            filtered = client.get(f"/api/sessions/{sid}/events?offset=1").json()
+            assert len(filtered) == len(all_events) - 1
