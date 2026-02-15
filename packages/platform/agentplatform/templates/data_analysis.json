@@ -1,0 +1,67 @@
+{
+  "_category": "data",
+  "_tags": ["data", "analysis", "visualization"],
+  "_estimated_cost": "~$0.25",
+  "id": "tpl_data_analysis",
+  "name": "Data Analysis",
+  "description": "3 agents that load a dataset, perform statistical analysis with code execution, and generate a report with visualizations.",
+  "version": "1.0.0",
+  "domain_pack": "codeos",
+  "nodes": [
+    {
+      "id": "data_loader",
+      "role": "custom",
+      "display_name": "Data Loader",
+      "position": {"x": 100, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a data loading agent. Read the dataset file, inspect its shape, columns, and data types. Save a data summary to data_summary.md with key statistics.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "code_execute", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 90.0, "max_recursion_depth": 1},
+        "max_steps": 15,
+        "advanced": null
+      }
+    },
+    {
+      "id": "statistician",
+      "role": "custom",
+      "display_name": "Statistician",
+      "position": {"x": 400, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a statistics agent. Read the data summary, then write and execute Python code to perform statistical analysis (correlations, distributions, outliers). Save results and charts to analysis_results.md.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "code_execute", "file_write"],
+        "budget": {"max_tokens": 25000, "max_tool_calls": 15, "max_time_seconds": 180.0, "max_recursion_depth": 1},
+        "max_steps": 20,
+        "advanced": null
+      }
+    },
+    {
+      "id": "report_writer",
+      "role": "custom",
+      "display_name": "Report Writer",
+      "position": {"x": 700, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a report writing agent. Read the analysis results and create a comprehensive data analysis report with findings, charts description, and recommendations. Save to report.md.",
+        "persona_preset": "formal",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 20000, "max_tool_calls": 8, "max_time_seconds": 90.0, "max_recursion_depth": 1},
+        "max_steps": 12,
+        "advanced": null
+      }
+    }
+  ],
+  "edges": [
+    {"source": "data_loader", "target": "statistician"},
+    {"source": "statistician", "target": "report_writer"}
+  ],
+  "variables": [
+    {"name": "dataset_path", "type": "string", "default": "", "description": "Path to the dataset file (CSV, JSON, etc.)"}
+  ],
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:00:00+00:00",
+  "template_source": null
+}

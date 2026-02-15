@@ -1,0 +1,51 @@
+{
+  "_category": "productivity",
+  "_tags": ["email", "summary", "gmail"],
+  "_estimated_cost": "~$0.10",
+  "id": "tpl_email_summary",
+  "name": "Email Summary",
+  "description": "2 agents that read recent emails and produce a prioritized digest with action items.",
+  "version": "1.0.0",
+  "domain_pack": "codeos",
+  "nodes": [
+    {
+      "id": "email_reader",
+      "role": "custom",
+      "display_name": "Email Reader",
+      "position": {"x": 100, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are an email reading agent. Fetch recent emails from Gmail and extract the sender, subject, date, and a brief summary of each. Save the raw data to emails.md.",
+        "persona_preset": "concise",
+        "tools": ["gmail_read", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 12,
+        "advanced": null
+      }
+    },
+    {
+      "id": "digest_writer",
+      "role": "custom",
+      "display_name": "Digest Writer",
+      "position": {"x": 400, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a digest writer agent. Read the email data, prioritize by urgency, group by topic, and produce a clean daily digest with action items. Save to digest.md.",
+        "persona_preset": "concise",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 8, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 10,
+        "advanced": null
+      }
+    }
+  ],
+  "edges": [
+    {"source": "email_reader", "target": "digest_writer"}
+  ],
+  "variables": [
+    {"name": "max_emails", "type": "string", "default": "20", "description": "Maximum number of emails to process"}
+  ],
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:00:00+00:00",
+  "template_source": null
+}

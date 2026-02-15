@@ -1,0 +1,84 @@
+{
+  "_category": "research",
+  "_tags": ["competitor", "analysis", "market"],
+  "_estimated_cost": "~$0.35",
+  "id": "tpl_competitor_analysis",
+  "name": "Competitor Analysis",
+  "description": "4 agents that research competitors online, gather product data, compare features, and produce a competitive landscape report.",
+  "version": "1.0.0",
+  "domain_pack": "codeos",
+  "nodes": [
+    {
+      "id": "scout",
+      "role": "custom",
+      "display_name": "Market Scout",
+      "position": {"x": 100, "y": 50},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a market scout agent. Search the web for competitors in the given market. For each competitor, note their name, website, key products, and positioning. Save findings to competitors_raw.md.",
+        "persona_preset": "analytical",
+        "tools": ["web_search", "file_write"],
+        "budget": {"max_tokens": 20000, "max_tool_calls": 15, "max_time_seconds": 120.0, "max_recursion_depth": 1},
+        "max_steps": 20,
+        "advanced": null
+      }
+    },
+    {
+      "id": "deep_diver",
+      "role": "custom",
+      "display_name": "Deep Diver",
+      "position": {"x": 100, "y": 250},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a deep research agent. For each competitor, search for pricing, features, recent news, funding, and customer reviews. Save detailed profiles to competitor_profiles.md.",
+        "persona_preset": "analytical",
+        "tools": ["web_search", "http_request", "file_read", "file_write"],
+        "budget": {"max_tokens": 25000, "max_tool_calls": 20, "max_time_seconds": 180.0, "max_recursion_depth": 1},
+        "max_steps": 25,
+        "advanced": null
+      }
+    },
+    {
+      "id": "comparator",
+      "role": "custom",
+      "display_name": "Feature Comparator",
+      "position": {"x": 500, "y": 150},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a comparison agent. Read the competitor profiles and create a feature comparison matrix. Identify strengths, weaknesses, gaps, and opportunities. Save to comparison.md.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 20000, "max_tool_calls": 10, "max_time_seconds": 90.0, "max_recursion_depth": 1},
+        "max_steps": 12,
+        "advanced": null
+      }
+    },
+    {
+      "id": "strategist",
+      "role": "custom",
+      "display_name": "Strategist",
+      "position": {"x": 800, "y": 150},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a strategy agent. Read the comparison analysis and produce a competitive landscape report with: market overview, competitor profiles, SWOT analysis, and strategic recommendations. Save to competitive_report.md.",
+        "persona_preset": "formal",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 25000, "max_tool_calls": 10, "max_time_seconds": 120.0, "max_recursion_depth": 1},
+        "max_steps": 15,
+        "advanced": null
+      }
+    }
+  ],
+  "edges": [
+    {"source": "scout", "target": "deep_diver"},
+    {"source": "deep_diver", "target": "comparator"},
+    {"source": "comparator", "target": "strategist"}
+  ],
+  "variables": [
+    {"name": "market", "type": "string", "default": "", "description": "Market or industry to analyze"},
+    {"name": "known_competitors", "type": "string", "default": "", "description": "Comma-separated list of known competitors (optional)"}
+  ],
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:00:00+00:00",
+  "template_source": null
+}

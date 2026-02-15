@@ -1,0 +1,65 @@
+{
+  "_category": "development",
+  "_tags": ["code", "review", "quality"],
+  "_estimated_cost": "~$0.15",
+  "id": "tpl_code_review",
+  "name": "Code Review",
+  "description": "3 agents that analyze code changes, review for bugs and style issues, and generate a summary report.",
+  "version": "1.0.0",
+  "domain_pack": "codeos",
+  "nodes": [
+    {
+      "id": "diff_analyzer",
+      "role": "custom",
+      "display_name": "Diff Analyzer",
+      "position": {"x": 100, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a diff analysis agent. Use git_diff and git_status to understand what changed. Identify affected files, added/removed lines, and the scope of changes. Save analysis to diff_analysis.md.",
+        "persona_preset": "analytical",
+        "tools": ["git_diff", "git_status", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 12,
+        "advanced": null
+      }
+    },
+    {
+      "id": "code_reviewer",
+      "role": "code_reviewer",
+      "display_name": "Code Reviewer",
+      "position": {"x": 400, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a code review agent. Read the diff analysis and the changed files. Check for bugs, security issues, performance problems, and style violations. Save review to code_review.md.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "grep", "file_write"],
+        "budget": {"max_tokens": 20000, "max_tool_calls": 15, "max_time_seconds": 120.0, "max_recursion_depth": 1},
+        "max_steps": 20,
+        "advanced": null
+      }
+    },
+    {
+      "id": "summarizer",
+      "role": "custom",
+      "display_name": "Summary Writer",
+      "position": {"x": 700, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a summary agent. Read the code review and produce a concise review summary with: overall assessment, critical issues, suggestions, and approval recommendation. Save to review_summary.md.",
+        "persona_preset": "concise",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 10000, "max_tool_calls": 5, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 8,
+        "advanced": null
+      }
+    }
+  ],
+  "edges": [
+    {"source": "diff_analyzer", "target": "code_reviewer"},
+    {"source": "code_reviewer", "target": "summarizer"}
+  ],
+  "variables": [],
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:00:00+00:00",
+  "template_source": null
+}

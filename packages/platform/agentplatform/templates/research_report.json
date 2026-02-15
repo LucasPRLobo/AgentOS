@@ -1,0 +1,83 @@
+{
+  "_category": "research",
+  "_tags": ["research", "writing", "review"],
+  "_estimated_cost": "~$0.30",
+  "id": "tpl_research_report",
+  "name": "Research Report",
+  "description": "A team of 4 agents that researches a topic online, analyzes findings, writes a structured report, and reviews it for accuracy.",
+  "version": "1.0.0",
+  "domain_pack": "codeos",
+  "nodes": [
+    {
+      "id": "researcher",
+      "role": "custom",
+      "display_name": "Researcher",
+      "position": {"x": 100, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a research agent. Search the web for information on the given topic. Collect key facts, statistics, and source URLs. Save your findings to research_notes.md.",
+        "persona_preset": "analytical",
+        "tools": ["web_search", "file_write"],
+        "budget": {"max_tokens": 20000, "max_tool_calls": 15, "max_time_seconds": 120.0, "max_recursion_depth": 1},
+        "max_steps": 20,
+        "advanced": null
+      }
+    },
+    {
+      "id": "analyst",
+      "role": "custom",
+      "display_name": "Analyst",
+      "position": {"x": 400, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are an analysis agent. Read the research notes and identify key themes, patterns, and insights. Write a structured analysis to analysis.md.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 90.0, "max_recursion_depth": 1},
+        "max_steps": 15,
+        "advanced": null
+      }
+    },
+    {
+      "id": "writer",
+      "role": "custom",
+      "display_name": "Writer",
+      "position": {"x": 700, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a writing agent. Read the analysis and produce a well-structured report with an executive summary, key findings, and recommendations. Save to report.md.",
+        "persona_preset": "formal",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 25000, "max_tool_calls": 10, "max_time_seconds": 120.0, "max_recursion_depth": 1},
+        "max_steps": 15,
+        "advanced": null
+      }
+    },
+    {
+      "id": "reviewer",
+      "role": "custom",
+      "display_name": "Reviewer",
+      "position": {"x": 1000, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a review agent. Read the report and verify facts against the original research notes. Flag any inaccuracies or missing citations. Write review feedback to review.md.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 90.0, "max_recursion_depth": 1},
+        "max_steps": 10,
+        "advanced": null
+      }
+    }
+  ],
+  "edges": [
+    {"source": "researcher", "target": "analyst"},
+    {"source": "analyst", "target": "writer"},
+    {"source": "writer", "target": "reviewer"}
+  ],
+  "variables": [
+    {"name": "topic", "type": "string", "default": "", "description": "The research topic to investigate"}
+  ],
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:00:00+00:00",
+  "template_source": null
+}

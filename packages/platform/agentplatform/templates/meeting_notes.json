@@ -1,0 +1,51 @@
+{
+  "_category": "productivity",
+  "_tags": ["meetings", "notes", "summary"],
+  "_estimated_cost": "~$0.10",
+  "id": "tpl_meeting_notes",
+  "name": "Meeting Notes",
+  "description": "2 agents that process meeting transcripts into structured notes with action items and decisions.",
+  "version": "1.0.0",
+  "domain_pack": "codeos",
+  "nodes": [
+    {
+      "id": "extractor",
+      "role": "custom",
+      "display_name": "Note Extractor",
+      "position": {"x": 100, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a note extraction agent. Read the meeting transcript and extract: attendees, topics discussed, key decisions, action items with owners, and open questions. Save structured data to raw_notes.md.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 8, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 10,
+        "advanced": null
+      }
+    },
+    {
+      "id": "formatter",
+      "role": "custom",
+      "display_name": "Formatter",
+      "position": {"x": 400, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a formatting agent. Read the raw notes and produce a polished meeting summary with: header, attendees list, discussion highlights, decisions table, action items checklist, and next steps. Save to meeting_summary.md.",
+        "persona_preset": "formal",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 8, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 10,
+        "advanced": null
+      }
+    }
+  ],
+  "edges": [
+    {"source": "extractor", "target": "formatter"}
+  ],
+  "variables": [
+    {"name": "transcript_file", "type": "string", "default": "transcript.txt", "description": "Path to the meeting transcript file"}
+  ],
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:00:00+00:00",
+  "template_source": null
+}

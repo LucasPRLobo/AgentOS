@@ -1,0 +1,68 @@
+{
+  "_category": "content",
+  "_tags": ["writing", "content", "marketing"],
+  "_estimated_cost": "~$0.20",
+  "id": "tpl_content_pipeline",
+  "name": "Content Pipeline",
+  "description": "3 agents that outline, draft, and polish written content (blog posts, articles, documentation).",
+  "version": "1.0.0",
+  "domain_pack": "codeos",
+  "nodes": [
+    {
+      "id": "outliner",
+      "role": "custom",
+      "display_name": "Outliner",
+      "position": {"x": 100, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are an outline agent. Create a detailed outline for the requested content, including section headings, key points for each section, and target word counts. Save to outline.md.",
+        "persona_preset": "analytical",
+        "tools": ["file_write", "web_search"],
+        "budget": {"max_tokens": 10000, "max_tool_calls": 8, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 10,
+        "advanced": null
+      }
+    },
+    {
+      "id": "drafter",
+      "role": "custom",
+      "display_name": "Drafter",
+      "position": {"x": 400, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a drafting agent. Read the outline and write a complete first draft, following the structure and hitting the target points. Save to draft.md.",
+        "persona_preset": "creative",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 30000, "max_tool_calls": 10, "max_time_seconds": 180.0, "max_recursion_depth": 1},
+        "max_steps": 15,
+        "advanced": null
+      }
+    },
+    {
+      "id": "editor",
+      "role": "custom",
+      "display_name": "Editor",
+      "position": {"x": 700, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are an editing agent. Read the draft and improve clarity, fix grammar, enhance flow, and ensure consistency. Save the final version to final.md.",
+        "persona_preset": "formal",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 20000, "max_tool_calls": 10, "max_time_seconds": 120.0, "max_recursion_depth": 1},
+        "max_steps": 15,
+        "advanced": null
+      }
+    }
+  ],
+  "edges": [
+    {"source": "outliner", "target": "drafter"},
+    {"source": "drafter", "target": "editor"}
+  ],
+  "variables": [
+    {"name": "content_type", "type": "string", "default": "blog post", "description": "Type of content to create"},
+    {"name": "topic", "type": "string", "default": "", "description": "Topic or title for the content"}
+  ],
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:00:00+00:00",
+  "template_source": null
+}
