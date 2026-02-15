@@ -10,6 +10,96 @@ from agentos.runtime.domain_registry import (
 from agentos.runtime.role_template import RoleTemplate
 from agentos.schemas.budget import BudgetSpec
 
+# ── Platform-Wide Tools (available to all packs) ──────────────────
+
+PLATFORM_TOOLS = [
+    ToolManifestEntry(
+        name="web_search",
+        description="Search the web using Brave Search or Google Custom Search API",
+        side_effect="READ",
+        factory="agentplatform.tools.web_search:WebSearchTool",
+    ),
+    ToolManifestEntry(
+        name="code_execute",
+        description="Execute code in a sandboxed subprocess with resource limits",
+        side_effect="WRITE",
+        factory="agentplatform.tools.code_execute:CodeExecuteTool",
+    ),
+    ToolManifestEntry(
+        name="http_request",
+        description="Make HTTP requests to external APIs and services",
+        side_effect="READ",
+        factory="agentplatform.tools.http_request:HTTPRequestTool",
+    ),
+    ToolManifestEntry(
+        name="file_list",
+        description="List files and directories with optional glob filtering",
+        side_effect="READ",
+        factory="agentplatform.tools.file_list:FileListTool",
+    ),
+    ToolManifestEntry(
+        name="gmail_read",
+        description="Read emails from Gmail",
+        side_effect="READ",
+        factory="agentplatform.tools.google.gmail:GmailReadTool",
+    ),
+    ToolManifestEntry(
+        name="gmail_send",
+        description="Send an email via Gmail",
+        side_effect="WRITE",
+        factory="agentplatform.tools.google.gmail:GmailSendTool",
+    ),
+    ToolManifestEntry(
+        name="google_sheets_read",
+        description="Read data from a Google Sheets spreadsheet",
+        side_effect="READ",
+        factory="agentplatform.tools.google.sheets:GoogleSheetsReadTool",
+    ),
+    ToolManifestEntry(
+        name="google_sheets_write",
+        description="Write data to a Google Sheets spreadsheet",
+        side_effect="WRITE",
+        factory="agentplatform.tools.google.sheets:GoogleSheetsWriteTool",
+    ),
+    ToolManifestEntry(
+        name="google_docs_read",
+        description="Read the contents of a Google Docs document",
+        side_effect="READ",
+        factory="agentplatform.tools.google.docs:GoogleDocsReadTool",
+    ),
+    ToolManifestEntry(
+        name="google_docs_write",
+        description="Append text to a Google Docs document",
+        side_effect="WRITE",
+        factory="agentplatform.tools.google.docs:GoogleDocsWriteTool",
+    ),
+    ToolManifestEntry(
+        name="google_drive_list",
+        description="List files in Google Drive",
+        side_effect="READ",
+        factory="agentplatform.tools.google.drive:GoogleDriveListTool",
+    ),
+    ToolManifestEntry(
+        name="google_drive_download",
+        description="Download a file from Google Drive",
+        side_effect="READ",
+        factory="agentplatform.tools.google.drive:GoogleDriveDownloadTool",
+    ),
+    ToolManifestEntry(
+        name="slack_post",
+        description="Post a message to a Slack channel",
+        side_effect="WRITE",
+        factory="agentplatform.tools.slack:SlackPostTool",
+    ),
+    ToolManifestEntry(
+        name="slack_read",
+        description="Read messages from a Slack channel",
+        side_effect="READ",
+        factory="agentplatform.tools.slack:SlackReadTool",
+    ),
+]
+
+
 # ── LabOS Manifest ──────────────────────────────────────────────────
 
 _LABOS_TOOLS = [
@@ -142,7 +232,7 @@ LABOS_MANIFEST = DomainPackManifest(
     display_name="Lab Research OS",
     description="Scientific workflow automation — ML experiment replication and multi-agent research",
     version="0.1.0",
-    tools=_LABOS_TOOLS,
+    tools=_LABOS_TOOLS + PLATFORM_TOOLS,
     role_templates=_LABOS_ROLES,
     workflows=_LABOS_WORKFLOWS,
 )
@@ -260,7 +350,7 @@ CODEOS_MANIFEST = DomainPackManifest(
     display_name="Code OS",
     description="Coding domain — file operations, shell commands, and git workflows",
     version="0.1.0",
-    tools=_CODEOS_TOOLS,
+    tools=_CODEOS_TOOLS + PLATFORM_TOOLS,
     role_templates=_CODEOS_ROLES,
     workflows=_CODEOS_WORKFLOWS,
 )

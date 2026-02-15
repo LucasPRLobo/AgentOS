@@ -19,6 +19,12 @@ platform = [
     "wsproto>=1.2",
     "httpx>=0.27",
 ]
+integrations = [
+    "google-api-python-client>=2.100",
+    "google-auth>=2.25",
+    "google-auth-oauthlib>=1.2",
+    "slack-sdk>=3.27",
+]
 
 [tool.setuptools.packages.find]
 where = ["packages/agentos", "packages/labos", "packages/codeos", "packages/platform"]
