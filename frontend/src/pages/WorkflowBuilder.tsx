@@ -39,7 +39,9 @@ import type {
 
 import AgentNode, { type AgentNodeData } from '../components/builder/AgentNode';
 import ConfigPanel from '../components/builder/ConfigPanel';
+import ErrorBanner from '../components/ErrorBanner';
 import NodePalette from '../components/builder/NodePalette';
+import Spinner from '../components/Spinner';
 import Toolbar from '../components/builder/Toolbar';
 
 const NODE_TYPES = { agentNode: AgentNode };
@@ -108,6 +110,8 @@ export default function WorkflowBuilder() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [pack, setPack] = useState<DomainPackDetail | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [actionError, setActionError] = useState('');
+  const [loadingWorkflow, setLoadingWorkflow] = useState(!isNew);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   // Load domain pack and models
@@ -119,6 +123,7 @@ export default function WorkflowBuilder() {
   // Load existing workflow
   useEffect(() => {
     if (!isNew && id) {
+      setLoadingWorkflow(true);
       getWorkflow(id)
         .then((wf) => {
           setWorkflowId(wf.id);
@@ -135,7 +140,8 @@ export default function WorkflowBuilder() {
           );
           setIsSaved(true);
         })
-        .catch(console.error);
+        .catch((err) => setActionError(err instanceof Error ? err.message : 'Failed to load workflow'))
+        .finally(() => setLoadingWorkflow(false));
     }
   }, [id, isNew, setNodes, setRFEdges]);
 
@@ -223,6 +229,20 @@ export default function WorkflowBuilder() {
     setIsSaved(false);
   }, []);
 
+  // ── Keyboard shortcuts ────────────────────────────────────────
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Ctrl+S / Cmd+S → save
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
+
   // ── Drag & drop from palette ────────────────────────────────
 
   function onDragOver(e: DragEvent) {
@@ -265,6 +285,7 @@ export default function WorkflowBuilder() {
     };
 
     try {
+      setActionError('');
       if (isNew || !isSaved) {
         if (isNew) {
           await saveWorkflow(wf);
@@ -275,36 +296,39 @@ export default function WorkflowBuilder() {
       }
       setIsSaved(true);
     } catch (err) {
-      console.error('Save failed:', err);
+      setActionError(err instanceof Error ? err.message : 'Failed to save workflow');
     }
   }
 
   async function handleRun() {
     await handleSave();
     try {
+      setActionError('');
       const result = await runWorkflow(workflowId);
       navigate(`/sessions/${result.session_id}`);
     } catch (err) {
-      console.error('Run failed:', err);
+      setActionError(err instanceof Error ? err.message : 'Failed to run workflow');
     }
   }
 
   async function handleValidate() {
     await handleSave();
     try {
+      setActionError('');
       const result = await validateWorkflow(workflowId);
       setValidationResult(result);
     } catch (err) {
-      console.error('Validate failed:', err);
+      setActionError(err instanceof Error ? err.message : 'Validation failed');
     }
   }
 
   async function handleDelete() {
     try {
+      setActionError('');
       await deleteWorkflow(workflowId);
       navigate('/');
     } catch (err) {
-      console.error('Delete failed:', err);
+      setActionError(err instanceof Error ? err.message : 'Failed to delete workflow');
     }
   }
 
@@ -312,8 +336,17 @@ export default function WorkflowBuilder() {
 
   const selectedNode = workflowNodes.find((n) => n.id === selectedNodeId);
 
+  if (loadingWorkflow) {
+    return <Spinner message="Loading workflow..." />;
+  }
+
   return (
     <div className="flex flex-col h-[calc(100vh-73px)]">
+      {actionError && (
+        <div className="px-4 py-2">
+          <ErrorBanner message={actionError} onDismiss={() => setActionError('')} />
+        </div>
+      )}
       <Toolbar
         workflowName={workflowName}
         nodeCount={workflowNodes.length}
@@ -333,7 +366,7 @@ export default function WorkflowBuilder() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Node Palette */}
-        <div className="w-56 border-r border-gray-800 p-3 overflow-y-auto bg-gray-950">
+        <div className="hidden md:block w-56 border-r border-gray-800 p-3 overflow-y-auto bg-gray-950">
           {pack && (
             <NodePalette roles={pack.role_templates} tools={pack.tools} />
           )}
@@ -370,7 +403,7 @@ export default function WorkflowBuilder() {
         </div>
 
         {/* Right: Config Panel */}
-        <div className="w-72 border-l border-gray-800 p-3 overflow-y-auto bg-gray-950">
+        <div className="hidden lg:block w-72 border-l border-gray-800 p-3 overflow-y-auto bg-gray-950">
           {selectedNode ? (
             <ConfigPanel
               node={selectedNode}

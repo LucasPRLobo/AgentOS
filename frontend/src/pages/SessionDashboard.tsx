@@ -11,7 +11,9 @@ import {
 import type { EventResponse, SessionDetail } from '../api/types';
 import ArtifactBrowser from '../components/ArtifactBrowser';
 import DagGraph from '../components/DagGraph';
+import ErrorBanner from '../components/ErrorBanner';
 import EventLog from '../components/EventLog';
+import Spinner from '../components/Spinner';
 
 const STATE_BADGES: Record<string, string> = {
   CREATED: 'bg-gray-700 text-gray-300',
@@ -54,14 +56,20 @@ export default function SessionDashboard() {
   const [events, setEvents] = useState<EventResponse[]>([]);
   const [elapsed, setElapsed] = useState(0);
   const [activeTab, setActiveTab] = useState<'events' | 'artifacts'>('events');
+  const [fetchError, setFetchError] = useState('');
+  const [stopError, setStopError] = useState('');
   const streamRef = useRef<EventStreamClient | null>(null);
   const startTime = useRef(Date.now());
 
   // Fetch initial session + events
   useEffect(() => {
     if (!id) return;
-    getSession(id).then(setSession);
-    getSessionEvents(id).then(setEvents);
+    getSession(id)
+      .then(setSession)
+      .catch((err) => setFetchError(err instanceof Error ? err.message : 'Failed to load session'));
+    getSessionEvents(id)
+      .then(setEvents)
+      .catch(() => {}); // Events will arrive via WebSocket
   }, [id]);
 
   // WebSocket event stream
@@ -102,14 +110,34 @@ export default function SessionDashboard() {
 
   const handleStop = useCallback(async () => {
     if (id) {
-      await stopSession(id);
-      getSession(id).then(setSession);
+      setStopError('');
+      try {
+        await stopSession(id);
+        getSession(id).then(setSession);
+      } catch (err) {
+        setStopError(err instanceof Error ? err.message : 'Failed to stop session');
+      }
     }
   }, [id]);
 
   const cost = useMemo(() => estimateCost(events), [events]);
 
-  if (!session) return <div className="text-gray-400">Loading session...</div>;
+  if (fetchError) {
+    return (
+      <div className="max-w-2xl mx-auto mt-12">
+        <ErrorBanner
+          message={fetchError}
+          onRetry={() => {
+            setFetchError('');
+            if (id) getSession(id).then(setSession).catch((err) =>
+              setFetchError(err instanceof Error ? err.message : 'Failed to load session'));
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (!session) return <Spinner message="Loading session..." />;
 
   // Build DAG nodes from events
   const dagNodes = session.agents.map((agent) => {
@@ -207,9 +235,15 @@ export default function SessionDashboard() {
         </div>
       </div>
 
+      {stopError && (
+        <div className="mt-4">
+          <ErrorBanner message={stopError} onDismiss={() => setStopError('')} />
+        </div>
+      )}
+
       {session.error && (
-        <div className="mt-4 bg-red-900/20 border border-red-800 rounded-lg p-4 text-red-300 text-sm">
-          Error: {session.error}
+        <div className="mt-4">
+          <ErrorBanner message={`Session error: ${session.error}`} />
         </div>
       )}
     </div>

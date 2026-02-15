@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listSessions } from '../api/client';
 import type { SessionSummary } from '../api/types';
+import Spinner from '../components/Spinner';
+import ErrorBanner from '../components/ErrorBanner';
+import EmptyState from '../components/EmptyState';
 
 const STATE_COLORS: Record<string, string> = {
   CREATED: 'text-gray-400',
@@ -16,15 +19,21 @@ const STATE_COLORS: Record<string, string> = {
 export default function SessionHistory() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const navigate = useNavigate();
 
-  useEffect(() => {
+  function loadSessions() {
+    setLoading(true);
+    setError('');
     listSessions()
       .then(setSessions)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load sessions'))
       .finally(() => setLoading(false));
-  }, []);
+  }
 
-  if (loading) return <div className="text-gray-400">Loading sessions...</div>;
+  useEffect(() => { loadSessions(); }, []);
+
+  if (loading) return <Spinner message="Loading sessions..." />;
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -38,11 +47,20 @@ export default function SessionHistory() {
         </button>
       </div>
 
-      {sessions.length === 0 ? (
-        <div className="text-center text-gray-600 py-16">
-          No sessions yet. Start by choosing a domain pack.
+      {error && (
+        <div className="mb-6">
+          <ErrorBanner message={error} onDismiss={() => setError('')} onRetry={loadSessions} />
         </div>
-      ) : (
+      )}
+
+      {sessions.length === 0 && !error ? (
+        <EmptyState
+          title="No sessions yet"
+          description="Launch a workflow to see your session history here."
+          actionLabel="Create New Session"
+          onAction={() => navigate('/')}
+        />
+      ) : sessions.length > 0 ? (
         <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -81,7 +99,7 @@ export default function SessionHistory() {
             </tbody>
           </table>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

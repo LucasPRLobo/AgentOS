@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { createSession, getPack, listModels, startSession } from '../api/client';
 import type { AgentSlotConfig, DomainPackDetail } from '../api/types';
+import ErrorBanner from '../components/ErrorBanner';
+import Spinner from '../components/Spinner';
 import RoleConfigurator from '../components/RoleConfigurator';
 
 export default function TeamBuilder() {
@@ -17,6 +19,7 @@ export default function TeamBuilder() {
   const [taskDescription, setTaskDescription] = useState('');
   const [workspaceRoot, setWorkspaceRoot] = useState('/tmp/agentos-session');
   const [launching, setLaunching] = useState(false);
+  const [error, setError] = useState('');
   const [models, setModels] = useState<string[]>([]);
 
   useEffect(() => {
@@ -43,7 +46,7 @@ export default function TeamBuilder() {
     });
   }, [packName]);
 
-  if (!pack) return <div className="text-gray-400">Loading...</div>;
+  if (!pack) return <Spinner message="Loading domain pack..." />;
 
   const roleMap = Object.fromEntries(pack.role_templates.map((r) => [r.name, r]));
   const toolSideEffects = Object.fromEntries(
@@ -68,6 +71,7 @@ export default function TeamBuilder() {
 
   const handleLaunch = async () => {
     setLaunching(true);
+    setError('');
     try {
       const session = await createSession({
         domain_pack: packName,
@@ -79,7 +83,7 @@ export default function TeamBuilder() {
       await startSession(session.session_id);
       navigate(`/sessions/${session.session_id}`);
     } catch (err) {
-      alert(`Failed to launch: ${err}`);
+      setError(err instanceof Error ? err.message : 'Failed to launch session');
       setLaunching(false);
     }
   };
@@ -90,9 +94,15 @@ export default function TeamBuilder() {
         Configure Team — {pack.display_name}
       </h2>
 
-      <div className="grid grid-cols-12 gap-6">
+      {error && (
+        <div className="mb-6">
+          <ErrorBanner message={error} onDismiss={() => setError('')} />
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
         {/* Left: Available Roles */}
-        <div className="col-span-3">
+        <div className="md:col-span-3">
           <h3 className="text-sm font-semibold text-gray-400 uppercase mb-3">
             Available Roles
           </h3>
@@ -115,7 +125,7 @@ export default function TeamBuilder() {
         </div>
 
         {/* Center: Team Configuration */}
-        <div className="col-span-6 space-y-4">
+        <div className="md:col-span-6 space-y-4">
           <h3 className="text-sm font-semibold text-gray-400 uppercase mb-3">
             Agent Team ({slots.length} roles)
           </h3>
@@ -142,7 +152,7 @@ export default function TeamBuilder() {
         </div>
 
         {/* Right: Workflow + Launch */}
-        <div className="col-span-3 space-y-4">
+        <div className="md:col-span-3 space-y-4">
           <div>
             <h3 className="text-sm font-semibold text-gray-400 uppercase mb-3">
               Workflow

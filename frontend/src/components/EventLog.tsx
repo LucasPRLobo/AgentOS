@@ -50,6 +50,11 @@ export default function EventLog({ events }: Props) {
         className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 mb-2 focus:outline-none focus:border-blue-500"
       />
       <div className="flex-1 overflow-y-auto space-y-1 font-mono text-xs">
+        {filtered.length === 0 && (
+          <div className="flex items-center justify-center h-full text-gray-600 text-sm">
+            {filter ? 'No events match your filter.' : 'Waiting for events...'}
+          </div>
+        )}
         {filtered.map((event, i) => {
           const color = EVENT_COLORS[event.event_type] ?? 'text-gray-500';
           return (

@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listTemplates, instantiateTemplate } from '../api/client';
 import type { TemplateSummary } from '../api/types';
+import Spinner from '../components/Spinner';
+import ErrorBanner from '../components/ErrorBanner';
+import EmptyState from '../components/EmptyState';
 
 const CATEGORY_COLORS: Record<string, string> = {
   research: 'bg-purple-900/50 text-purple-300',
@@ -16,23 +19,29 @@ const CATEGORY_COLORS: Record<string, string> = {
 export default function Home() {
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [instantiating, setInstantiating] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
+  function loadTemplates() {
+    setLoading(true);
+    setError('');
     listTemplates()
       .then(setTemplates)
-      .catch(console.error)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load templates'))
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { loadTemplates(); }, []);
 
   async function handleUseTemplate(tpl: TemplateSummary) {
     setInstantiating(tpl.id);
+    setError('');
     try {
       const wf = await instantiateTemplate(tpl.id);
       navigate(`/workflows/${wf.id}/edit?pack=${tpl.domain_pack}`);
     } catch (err) {
-      console.error('Failed to instantiate template:', err);
+      setError(err instanceof Error ? err.message : 'Failed to create workflow from template');
     } finally {
       setInstantiating(null);
     }
@@ -86,11 +95,21 @@ export default function Home() {
         <div className="flex-1 border-t border-gray-800" />
       </div>
 
+      {/* Error */}
+      {error && (
+        <div className="mb-6">
+          <ErrorBanner message={error} onDismiss={() => setError('')} onRetry={loadTemplates} />
+        </div>
+      )}
+
       {/* Template grid */}
       {loading ? (
-        <div className="text-gray-500 text-sm">Loading templates...</div>
+        <Spinner message="Loading templates..." />
       ) : templates.length === 0 ? (
-        <div className="text-gray-500 text-sm">No templates available.</div>
+        <EmptyState
+          title="No templates available"
+          description="Templates will appear here once the server is running and has templates configured."
+        />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {templates.map((tpl) => (
