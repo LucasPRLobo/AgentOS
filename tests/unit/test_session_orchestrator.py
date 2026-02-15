@@ -186,7 +186,7 @@ class TestSessionQueries:
         assert info["domain_pack"] == "labos"
         assert info["workflow"] == "multi_agent_research"
 
-    def test_get_events_after_seq(
+    def test_get_events_with_offset(
         self, orchestrator: SessionOrchestrator, labos_config: SessionConfig
     ) -> None:
         sid = orchestrator.create_session(labos_config)
@@ -195,8 +195,8 @@ class TestSessionQueries:
         time.sleep(2.0)
         all_events = orchestrator.get_session_events(sid)
         if len(all_events) > 1:
-            filtered = orchestrator.get_session_events(sid, after_seq=1)
-            assert len(filtered) < len(all_events)
+            filtered = orchestrator.get_session_events(sid, offset=1)
+            assert len(filtered) == len(all_events) - 1
 
     def test_unknown_session_raises(
         self, orchestrator: SessionOrchestrator

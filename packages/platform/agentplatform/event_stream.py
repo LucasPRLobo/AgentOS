@@ -33,7 +33,7 @@ class EventStreamer:
         Runs until the session is in a terminal state and no new events
         are available, or until the client disconnects.
         """
-        last_seq = -1
+        total_seen = 0
         terminal_states = {"SUCCEEDED", "FAILED", "STOPPED"}
         idle_count = 0
         max_idle = 50  # Stop after ~5 seconds of no new events in terminal state
@@ -41,7 +41,7 @@ class EventStreamer:
         while True:
             try:
                 events = orchestrator.get_session_events(
-                    session_id, after_seq=last_seq + 1
+                    session_id, offset=total_seen
                 )
             except KeyError:
                 break
@@ -57,8 +57,7 @@ class EventStreamer:
                         "payload": event.payload,
                     }
                     await websocket.send_text(json.dumps(payload))
-                    if event.seq > last_seq:
-                        last_seq = event.seq
+                total_seen += len(events)
             else:
                 idle_count += 1
 

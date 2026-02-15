@@ -11,6 +11,10 @@ from agentos.lm.provider import BaseLMProvider, LMMessage, LMResponse
 logger = logging.getLogger(__name__)
 
 
+_NO_TEMPERATURE_MODELS = ("o1", "o3", "gpt-5")
+"""Model prefixes that reject custom temperature (only default=1 allowed)."""
+
+
 class OpenAIProvider(BaseLMProvider):
     """LM provider backed by the OpenAI API.
 
@@ -62,6 +66,9 @@ class OpenAIProvider(BaseLMProvider):
     def get_model_name(self) -> str:
         return self._model
 
+    def _supports_temperature(self) -> bool:
+        return not self._model.startswith(_NO_TEMPERATURE_MODELS)
+
     def complete(self, messages: list[LMMessage]) -> LMResponse:
         """Generate a completion using the OpenAI chat API."""
         api_messages = [{"role": m.role, "content": m.content} for m in messages]
@@ -69,8 +76,9 @@ class OpenAIProvider(BaseLMProvider):
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": api_messages,
-            "temperature": self._temperature,
         }
+        if self._supports_temperature():
+            kwargs["temperature"] = self._temperature
         if self._max_tokens is not None:
             kwargs["max_tokens"] = self._max_tokens
 
@@ -106,8 +114,9 @@ class OpenAIProvider(BaseLMProvider):
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": api_messages,
-            "temperature": self._temperature,
         }
+        if self._supports_temperature():
+            kwargs["temperature"] = self._temperature
         if self._max_tokens is not None:
             kwargs["max_tokens"] = self._max_tokens
 

@@ -37,6 +37,10 @@ class BudgetManager:
     def spec(self) -> BudgetSpec:
         return self._spec
 
+    def set_run_id(self, run_id: RunId) -> None:
+        """Update the run_id used for event emission."""
+        self._run_id = run_id
+
     def set_seq(self, seq: int) -> None:
         """Set the current sequence counter for event emission."""
         self._seq = seq

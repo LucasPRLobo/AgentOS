@@ -15,7 +15,7 @@
       "position": {"x": 100, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are an outline agent. If useful, use web_search to gather background information. Create a detailed outline with section headings, key points per section, and target word counts. Save to outline.md using the file_write tool.",
+        "system_prompt": "You are an outline agent. Create a detailed outline with section headings, key points per section, and target word counts. Use web_search if you need background information. Save the outline to outline.md using file_write, then finish. IMPORTANT: Always proceed with the information you have. If the topic is vague, choose a reasonable angle and go. Never ask for clarification — just produce the outline.",
         "persona_preset": "analytical",
         "tools": ["file_write", "web_search"],
         "budget": {"max_tokens": 10000, "max_tool_calls": 8, "max_time_seconds": 60.0, "max_recursion_depth": 1},
@@ -30,7 +30,7 @@
       "position": {"x": 400, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are a drafting agent. Read outline.md using file_read, then write a complete first draft following the structure and hitting all target points. Save to draft.md using file_write.",
+        "system_prompt": "You are a drafting agent. Your input is the outline from the previous agent — it will be provided in your task description. Use it directly. Write a complete first draft following the outline structure and hitting all points. Save to draft.md using file_write. If you also want to check for an outline.md file, try file_read first, but the inline outline from the previous agent is your primary source. Never ask for clarification — just write the draft.",
         "persona_preset": "creative",
         "tools": ["file_read", "file_write"],
         "budget": {"max_tokens": 30000, "max_tool_calls": 10, "max_time_seconds": 180.0, "max_recursion_depth": 1},
@@ -45,7 +45,7 @@
       "position": {"x": 700, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are an editing agent. Read draft.md using file_read. Improve clarity, fix grammar, enhance flow, and ensure consistency. Save the polished final version to final.md using file_write.",
+        "system_prompt": "You are an editing agent. Your input is the draft from the previous agent — it will be provided in your task description. Use it directly. Improve clarity, fix grammar, enhance flow, and ensure consistency. Save the polished final version to final.md using file_write. You may also try reading draft.md via file_read, but the inline draft from the previous agent is your primary source. Never ask for clarification — just edit and polish.",
         "persona_preset": "formal",
         "tools": ["file_read", "file_write"],
         "budget": {"max_tokens": 20000, "max_tool_calls": 10, "max_time_seconds": 120.0, "max_recursion_depth": 1},
@@ -60,7 +60,7 @@
   ],
   "variables": [
     {"name": "content_type", "type": "string", "default": "blog post", "description": "Type of content to create"},
-    {"name": "topic", "type": "string", "default": "", "description": "Topic or title for the content"}
+    {"name": "topic", "type": "string", "default": "The Future of AI Agents in Software Development", "description": "Topic or title for the content"}
   ],
   "created_at": "2025-01-01T00:00:00+00:00",
   "updated_at": "2025-01-01T00:00:00+00:00",

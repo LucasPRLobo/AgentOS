@@ -580,10 +580,10 @@ def create_app(
         return {"status": "stopped"}
 
     @app.get("/api/sessions/{session_id}/events", response_model=list[EventResponse])
-    def get_session_events(session_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
+    def get_session_events(session_id: str, offset: int = 0) -> list[dict[str, Any]]:
         try:
             events = orchestrator.get_session_events(
-                session_id, after_seq=after_seq
+                session_id, offset=offset
             )
         except KeyError:
             raise HTTPException(

@@ -99,9 +99,9 @@ export async function stopSession(id: string): Promise<{ status: string }> {
 
 export async function getSessionEvents(
   id: string,
-  afterSeq = 0,
+  offset = 0,
 ): Promise<EventResponse[]> {
-  return fetchJSON(`/api/sessions/${id}/events?after_seq=${afterSeq}`);
+  return fetchJSON(`/api/sessions/${id}/events?offset=${offset}`);
 }
 
 // ── Workflows ────────────────────────────────────────────────────

@@ -103,6 +103,10 @@ class AgentRunner:
         rid = run_id or generate_run_id()
         seq = _SeqCounter(0)
 
+        # Sync budget manager's run_id so its events use the same run_id
+        if self._budget_manager is not None:
+            self._budget_manager.set_run_id(rid)
+
         # Emit RunStarted
         self._event_log.append(
             RunStarted(
