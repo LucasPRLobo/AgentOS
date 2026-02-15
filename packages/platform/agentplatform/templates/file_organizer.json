@@ -55,8 +55,8 @@
     }
   ],
   "edges": [
-    {"source": "scanner", "target": "categorizer"},
-    {"source": "categorizer", "target": "organizer"}
+    {"source": "scanner", "target": "categorizer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "file_inventory.md"}}}, "input_schema": null}},
+    {"source": "categorizer", "target": "organizer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "plan.md"}}}, "input_schema": null}}
   ],
   "variables": [
     {"name": "target_directory", "type": "string", "default": ".", "description": "Directory to organize"}

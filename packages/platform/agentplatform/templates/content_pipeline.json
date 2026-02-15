@@ -15,7 +15,7 @@
       "position": {"x": 100, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are an outline agent. Create a detailed outline for the requested content, including section headings, key points for each section, and target word counts. Save to outline.md.",
+        "system_prompt": "You are an outline agent. If useful, use web_search to gather background information. Create a detailed outline with section headings, key points per section, and target word counts. Save to outline.md using the file_write tool.",
         "persona_preset": "analytical",
         "tools": ["file_write", "web_search"],
         "budget": {"max_tokens": 10000, "max_tool_calls": 8, "max_time_seconds": 60.0, "max_recursion_depth": 1},
@@ -30,7 +30,7 @@
       "position": {"x": 400, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are a drafting agent. Read the outline and write a complete first draft, following the structure and hitting the target points. Save to draft.md.",
+        "system_prompt": "You are a drafting agent. Read outline.md using file_read, then write a complete first draft following the structure and hitting all target points. Save to draft.md using file_write.",
         "persona_preset": "creative",
         "tools": ["file_read", "file_write"],
         "budget": {"max_tokens": 30000, "max_tool_calls": 10, "max_time_seconds": 180.0, "max_recursion_depth": 1},
@@ -45,7 +45,7 @@
       "position": {"x": 700, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are an editing agent. Read the draft and improve clarity, fix grammar, enhance flow, and ensure consistency. Save the final version to final.md.",
+        "system_prompt": "You are an editing agent. Read draft.md using file_read. Improve clarity, fix grammar, enhance flow, and ensure consistency. Save the polished final version to final.md using file_write.",
         "persona_preset": "formal",
         "tools": ["file_read", "file_write"],
         "budget": {"max_tokens": 20000, "max_tool_calls": 10, "max_time_seconds": 120.0, "max_recursion_depth": 1},
@@ -55,8 +55,8 @@
     }
   ],
   "edges": [
-    {"source": "outliner", "target": "drafter"},
-    {"source": "drafter", "target": "editor"}
+    {"source": "outliner", "target": "drafter", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "outline.md"}}}, "input_schema": null}},
+    {"source": "drafter", "target": "editor", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "draft.md"}}}, "input_schema": null}}
   ],
   "variables": [
     {"name": "content_type", "type": "string", "default": "blog post", "description": "Type of content to create"},

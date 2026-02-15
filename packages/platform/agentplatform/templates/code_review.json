@@ -15,7 +15,7 @@
       "position": {"x": 100, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are a diff analysis agent. Use git_diff and git_status to understand what changed. Identify affected files, added/removed lines, and the scope of changes. Save analysis to diff_analysis.md.",
+        "system_prompt": "You are a diff analysis agent. Use the git_diff tool to see what changed, and git_status to see affected files. Identify added/removed lines and the scope of changes. Save a structured analysis to diff_analysis.md using file_write.",
         "persona_preset": "analytical",
         "tools": ["git_diff", "git_status", "file_write"],
         "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 60.0, "max_recursion_depth": 1},
@@ -30,7 +30,7 @@
       "position": {"x": 400, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are a code review agent. Read the diff analysis and the changed files. Check for bugs, security issues, performance problems, and style violations. Save review to code_review.md.",
+        "system_prompt": "You are a code review agent. Read diff_analysis.md using file_read, then use grep and file_read to inspect changed files. Check for bugs, security issues, performance problems, and style violations. Save your review to code_review.md using file_write.",
         "persona_preset": "analytical",
         "tools": ["file_read", "grep", "file_write"],
         "budget": {"max_tokens": 20000, "max_tool_calls": 15, "max_time_seconds": 120.0, "max_recursion_depth": 1},
@@ -55,8 +55,8 @@
     }
   ],
   "edges": [
-    {"source": "diff_analyzer", "target": "code_reviewer"},
-    {"source": "code_reviewer", "target": "summarizer"}
+    {"source": "diff_analyzer", "target": "code_reviewer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "diff_analysis.md"}}}, "input_schema": null}},
+    {"source": "code_reviewer", "target": "summarizer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "code_review.md"}}}, "input_schema": null}}
   ],
   "variables": [],
   "created_at": "2025-01-01T00:00:00+00:00",

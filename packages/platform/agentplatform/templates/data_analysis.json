@@ -15,7 +15,7 @@
       "position": {"x": 100, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are a data loading agent. Read the dataset file, inspect its shape, columns, and data types. Save a data summary to data_summary.md with key statistics.",
+        "system_prompt": "You are a data loading agent. Use file_read to examine the dataset, then use code_execute to run Python code that inspects shape, columns, dtypes, and computes basic statistics (mean, median, nulls). Save the summary to data_summary.md using file_write.",
         "persona_preset": "analytical",
         "tools": ["file_read", "code_execute", "file_write"],
         "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 90.0, "max_recursion_depth": 1},
@@ -30,7 +30,7 @@
       "position": {"x": 400, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are a statistics agent. Read the data summary, then write and execute Python code to perform statistical analysis (correlations, distributions, outliers). Save results and charts to analysis_results.md.",
+        "system_prompt": "You are a statistics agent. Read data_summary.md using file_read, then use code_execute to run Python code for correlations, distributions, and outlier detection. Save charts as PNG files and results to analysis_results.md using file_write.",
         "persona_preset": "analytical",
         "tools": ["file_read", "code_execute", "file_write"],
         "budget": {"max_tokens": 25000, "max_tool_calls": 15, "max_time_seconds": 180.0, "max_recursion_depth": 1},
@@ -55,8 +55,8 @@
     }
   ],
   "edges": [
-    {"source": "data_loader", "target": "statistician"},
-    {"source": "statistician", "target": "report_writer"}
+    {"source": "data_loader", "target": "statistician", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "data_summary.md"}}}, "input_schema": null}},
+    {"source": "statistician", "target": "report_writer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "analysis_results.md"}}}, "input_schema": null}}
   ],
   "variables": [
     {"name": "dataset_path", "type": "string", "default": "", "description": "Path to the dataset file (CSV, JSON, etc.)"}

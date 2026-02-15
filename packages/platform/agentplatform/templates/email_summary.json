@@ -40,7 +40,7 @@
     }
   ],
   "edges": [
-    {"source": "email_reader", "target": "digest_writer"}
+    {"source": "email_reader", "target": "digest_writer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "emails.md"}}}, "input_schema": null}}
   ],
   "variables": [
     {"name": "max_emails", "type": "string", "default": "20", "description": "Maximum number of emails to process"}

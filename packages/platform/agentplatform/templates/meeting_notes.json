@@ -40,7 +40,7 @@
     }
   ],
   "edges": [
-    {"source": "extractor", "target": "formatter"}
+    {"source": "extractor", "target": "formatter", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "raw_notes.md"}}}, "input_schema": null}}
   ],
   "variables": [
     {"name": "transcript_file", "type": "string", "default": "transcript.txt", "description": "Path to the meeting transcript file"}

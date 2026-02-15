@@ -15,7 +15,7 @@
       "position": {"x": 100, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are a research agent. Search the web for information on the given topic. Collect key facts, statistics, and source URLs. Save your findings to research_notes.md.",
+        "system_prompt": "You are a research agent. Search the web for information on the given topic using the web_search tool. For each search, extract key facts, statistics, and source URLs. Compile all findings into a structured markdown document and save it to research_notes.md using the file_write tool. Include at least 5 sources with URLs.",
         "persona_preset": "analytical",
         "tools": ["web_search", "file_write"],
         "budget": {"max_tokens": 20000, "max_tool_calls": 15, "max_time_seconds": 120.0, "max_recursion_depth": 1},
@@ -30,7 +30,7 @@
       "position": {"x": 400, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are an analysis agent. Read the research notes and identify key themes, patterns, and insights. Write a structured analysis to analysis.md.",
+        "system_prompt": "You are an analysis agent. Read research_notes.md using the file_read tool. Identify key themes, patterns, contradictions, and insights across the sources. Write a structured analysis with sections for each major theme to analysis.md using the file_write tool.",
         "persona_preset": "analytical",
         "tools": ["file_read", "file_write"],
         "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 90.0, "max_recursion_depth": 1},
@@ -45,7 +45,7 @@
       "position": {"x": 700, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are a writing agent. Read the analysis and produce a well-structured report with an executive summary, key findings, and recommendations. Save to report.md.",
+        "system_prompt": "You are a writing agent. Read analysis.md using the file_read tool. Produce a well-structured report with: 1) Executive Summary, 2) Introduction, 3) Key Findings (with citations), 4) Analysis, 5) Recommendations, 6) Sources. Save the final report to report.md using the file_write tool.",
         "persona_preset": "formal",
         "tools": ["file_read", "file_write"],
         "budget": {"max_tokens": 25000, "max_tool_calls": 10, "max_time_seconds": 120.0, "max_recursion_depth": 1},
@@ -60,7 +60,7 @@
       "position": {"x": 1000, "y": 100},
       "config": {
         "model": "gpt-4o-mini",
-        "system_prompt": "You are a review agent. Read the report and verify facts against the original research notes. Flag any inaccuracies or missing citations. Write review feedback to review.md.",
+        "system_prompt": "You are a review agent. Read both report.md and research_notes.md using the file_read tool. Cross-check facts in the report against the original research. Flag any inaccuracies, unsupported claims, or missing citations. Write your review with a pass/fail verdict and specific feedback to review.md using the file_write tool.",
         "persona_preset": "analytical",
         "tools": ["file_read", "file_write"],
         "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 90.0, "max_recursion_depth": 1},
@@ -70,9 +70,9 @@
     }
   ],
   "edges": [
-    {"source": "researcher", "target": "analyst"},
-    {"source": "analyst", "target": "writer"},
-    {"source": "writer", "target": "reviewer"}
+    {"source": "researcher", "target": "analyst", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "research_notes.md"}}}, "input_schema": null}},
+    {"source": "analyst", "target": "writer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "analysis.md"}}}, "input_schema": null}},
+    {"source": "writer", "target": "reviewer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "report.md"}}}, "input_schema": null}}
   ],
   "variables": [
     {"name": "topic", "type": "string", "default": "", "description": "The research topic to investigate"}

@@ -70,9 +70,9 @@
     }
   ],
   "edges": [
-    {"source": "scout", "target": "deep_diver"},
-    {"source": "deep_diver", "target": "comparator"},
-    {"source": "comparator", "target": "strategist"}
+    {"source": "scout", "target": "deep_diver", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "competitors_raw.md"}}}, "input_schema": null}},
+    {"source": "deep_diver", "target": "comparator", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "competitor_profiles.md"}}}, "input_schema": null}},
+    {"source": "comparator", "target": "strategist", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "comparison.md"}}}, "input_schema": null}}
   ],
   "variables": [
     {"name": "market", "type": "string", "default": "", "description": "Market or industry to analyze"},
