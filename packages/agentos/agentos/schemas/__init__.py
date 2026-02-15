@@ -30,6 +30,15 @@ from agentos.schemas.events import (
     WorkspaceSnapshot,
 )
 from agentos.schemas.tool_call import ToolCallRecord
+from agentos.schemas.workflow import (
+    AdvancedModelConfig,
+    DataContract,
+    WorkflowDefinition,
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowNodeConfig,
+    WorkflowVariable,
+)
 
 __all__ = [
     "AgentMessage",
@@ -62,4 +71,11 @@ __all__ = [
     "ToolCallRecord",
     "ToolCallStarted",
     "WorkspaceSnapshot",
+    "AdvancedModelConfig",
+    "DataContract",
+    "WorkflowDefinition",
+    "WorkflowEdge",
+    "WorkflowNode",
+    "WorkflowNodeConfig",
+    "WorkflowVariable",
 ]
