@@ -1,0 +1,83 @@
+{
+  "_category": "research",
+  "_tags": ["research", "writing", "review"],
+  "_estimated_cost": "~$0.30",
+  "id": "tpl_research_report",
+  "name": "Research Report",
+  "description": "A team of 4 agents that researches a topic online, analyzes findings, writes a structured report, and reviews it for accuracy.",
+  "version": "1.0.0",
+  "domain_pack": "codeos",
+  "nodes": [
+    {
+      "id": "researcher",
+      "role": "custom",
+      "display_name": "Researcher",
+      "position": {"x": 100, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a research agent. Search the web for information on the given topic using the web_search tool. For each search, extract key facts, statistics, and source URLs. Compile all findings into a structured markdown document and save it to research_notes.md using the file_write tool. Include at least 5 sources with URLs.",
+        "persona_preset": "analytical",
+        "tools": ["web_search", "file_write"],
+        "budget": {"max_tokens": 20000, "max_tool_calls": 15, "max_time_seconds": 120.0, "max_recursion_depth": 1},
+        "max_steps": 20,
+        "advanced": null
+      }
+    },
+    {
+      "id": "analyst",
+      "role": "custom",
+      "display_name": "Analyst",
+      "position": {"x": 400, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are an analysis agent. Read research_notes.md using the file_read tool. Identify key themes, patterns, contradictions, and insights across the sources. Write a structured analysis with sections for each major theme to analysis.md using the file_write tool.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 90.0, "max_recursion_depth": 1},
+        "max_steps": 15,
+        "advanced": null
+      }
+    },
+    {
+      "id": "writer",
+      "role": "custom",
+      "display_name": "Writer",
+      "position": {"x": 700, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a writing agent. Read analysis.md using the file_read tool. Produce a well-structured report with: 1) Executive Summary, 2) Introduction, 3) Key Findings (with citations), 4) Analysis, 5) Recommendations, 6) Sources. Save the final report to report.md using the file_write tool.",
+        "persona_preset": "formal",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 25000, "max_tool_calls": 10, "max_time_seconds": 120.0, "max_recursion_depth": 1},
+        "max_steps": 15,
+        "advanced": null
+      }
+    },
+    {
+      "id": "reviewer",
+      "role": "custom",
+      "display_name": "Reviewer",
+      "position": {"x": 1000, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a review agent. Read both report.md and research_notes.md using the file_read tool. Cross-check facts in the report against the original research. Flag any inaccuracies, unsupported claims, or missing citations. Write your review with a pass/fail verdict and specific feedback to review.md using the file_write tool.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 15000, "max_tool_calls": 10, "max_time_seconds": 90.0, "max_recursion_depth": 1},
+        "max_steps": 10,
+        "advanced": null
+      }
+    }
+  ],
+  "edges": [
+    {"source": "researcher", "target": "analyst", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "research_notes.md"}}}, "input_schema": null}},
+    {"source": "analyst", "target": "writer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "analysis.md"}}}, "input_schema": null}},
+    {"source": "writer", "target": "reviewer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "report.md"}}}, "input_schema": null}}
+  ],
+  "variables": [
+    {"name": "topic", "type": "string", "default": "", "description": "The research topic to investigate"}
+  ],
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:00:00+00:00",
+  "template_source": null
+}

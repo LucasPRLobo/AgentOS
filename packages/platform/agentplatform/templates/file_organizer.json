@@ -1,0 +1,67 @@
+{
+  "_category": "productivity",
+  "_tags": ["files", "organization", "automation"],
+  "_estimated_cost": "~$0.05",
+  "id": "tpl_file_organizer",
+  "name": "File Organizer",
+  "description": "3 agents that scan a directory, categorize files by type and content, and organize them into a clean folder structure.",
+  "version": "1.0.0",
+  "domain_pack": "codeos",
+  "nodes": [
+    {
+      "id": "scanner",
+      "role": "custom",
+      "display_name": "File Scanner",
+      "position": {"x": 100, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a file scanning agent. List all files in the workspace, noting their names, sizes, and types. Save the inventory to file_inventory.md.",
+        "persona_preset": "analytical",
+        "tools": ["file_list", "file_write"],
+        "budget": {"max_tokens": 10000, "max_tool_calls": 10, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 15,
+        "advanced": null
+      }
+    },
+    {
+      "id": "categorizer",
+      "role": "custom",
+      "display_name": "Categorizer",
+      "position": {"x": 400, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a categorization agent. Read the file inventory and categorize each file into groups (documents, images, code, data, etc.). Create an organization plan in plan.md.",
+        "persona_preset": "analytical",
+        "tools": ["file_read", "file_write"],
+        "budget": {"max_tokens": 10000, "max_tool_calls": 8, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 10,
+        "advanced": null
+      }
+    },
+    {
+      "id": "organizer",
+      "role": "custom",
+      "display_name": "Organizer",
+      "position": {"x": 700, "y": 100},
+      "config": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a file organizer agent. Read the organization plan and execute the moves using shell commands to create directories and move files.",
+        "persona_preset": "concise",
+        "tools": ["file_read", "run_command"],
+        "budget": {"max_tokens": 10000, "max_tool_calls": 20, "max_time_seconds": 60.0, "max_recursion_depth": 1},
+        "max_steps": 25,
+        "advanced": null
+      }
+    }
+  ],
+  "edges": [
+    {"source": "scanner", "target": "categorizer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "file_inventory.md"}}}, "input_schema": null}},
+    {"source": "categorizer", "target": "organizer", "data_contract": {"output_schema": {"type": "object", "required": ["file"], "properties": {"file": {"const": "plan.md"}}}, "input_schema": null}}
+  ],
+  "variables": [
+    {"name": "target_directory", "type": "string", "default": ".", "description": "Directory to organize"}
+  ],
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:00:00+00:00",
+  "template_source": null
+}

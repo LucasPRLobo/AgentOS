@@ -3,6 +3,7 @@
 from agentos.schemas.artifact import ArtifactMeta
 from agentos.schemas.budget import BudgetDelta, BudgetSpec, BudgetUsage
 from agentos.schemas.events import (
+    AgentMessage,
     AgentStepFinished,
     AgentStepStarted,
     ArtifactCreated,
@@ -19,6 +20,8 @@ from agentos.schemas.events import (
     RLMIterationStarted,
     RunFinished,
     RunStarted,
+    SessionFinished,
+    SessionStarted,
     StopCondition,
     TaskFinished,
     TaskStarted,
@@ -27,8 +30,18 @@ from agentos.schemas.events import (
     WorkspaceSnapshot,
 )
 from agentos.schemas.tool_call import ToolCallRecord
+from agentos.schemas.workflow import (
+    AdvancedModelConfig,
+    DataContract,
+    WorkflowDefinition,
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowNodeConfig,
+    WorkflowVariable,
+)
 
 __all__ = [
+    "AgentMessage",
     "AgentStepFinished",
     "AgentStepStarted",
     "ArtifactCreated",
@@ -49,6 +62,8 @@ __all__ = [
     "RLMIterationStarted",
     "RunFinished",
     "RunStarted",
+    "SessionFinished",
+    "SessionStarted",
     "StopCondition",
     "TaskFinished",
     "TaskStarted",
@@ -56,4 +71,11 @@ __all__ = [
     "ToolCallRecord",
     "ToolCallStarted",
     "WorkspaceSnapshot",
+    "AdvancedModelConfig",
+    "DataContract",
+    "WorkflowDefinition",
+    "WorkflowEdge",
+    "WorkflowNode",
+    "WorkflowNodeConfig",
+    "WorkflowVariable",
 ]

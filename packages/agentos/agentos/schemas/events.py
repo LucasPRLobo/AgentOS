@@ -34,6 +34,9 @@ class EventType(StrEnum):
     AGENT_STEP_STARTED = "AgentStepStarted"
     AGENT_STEP_FINISHED = "AgentStepFinished"
     WORKSPACE_SNAPSHOT = "WorkspaceSnapshot"
+    SESSION_STARTED = "SessionStarted"
+    SESSION_FINISHED = "SessionFinished"
+    AGENT_MESSAGE = "AgentMessage"
 
 
 def _utc_now() -> datetime:
@@ -168,3 +171,28 @@ class WorkspaceSnapshot(BaseEvent):
     """Emitted to capture workspace state at run start/end."""
 
     event_type: EventType = EventType.WORKSPACE_SNAPSHOT
+
+
+class SessionStarted(BaseEvent):
+    """Emitted when a multi-agent session begins."""
+
+    event_type: EventType = EventType.SESSION_STARTED
+
+
+class SessionFinished(BaseEvent):
+    """Emitted when a multi-agent session completes."""
+
+    event_type: EventType = EventType.SESSION_FINISHED
+
+
+class AgentMessage(BaseEvent):
+    """Inter-agent message routed through the event log.
+
+    Payload convention:
+        from_agent: str — name of the sending agent
+        to_agent: str | None — target agent (None for broadcast)
+        topic: str — message topic / channel
+        content: str — message body
+    """
+
+    event_type: EventType = EventType.AGENT_MESSAGE

@@ -13,10 +13,26 @@ dev = [
     "mypy>=1.0",
     "ruff>=0.4",
 ]
+platform = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "wsproto>=1.2",
+    "httpx>=0.27",
+]
+integrations = [
+    "google-api-python-client>=2.100",
+    "google-auth>=2.25",
+    "google-auth-oauthlib>=1.2",
+    "slack-sdk>=3.27",
+]
+
+[tool.setuptools.packages.find]
+where = ["packages/agentos", "packages/labos", "packages/codeos", "packages/platform"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["packages/agentos", "packages/labos", "packages/codeos"]
+pythonpath = ["packages/agentos", "packages/labos", "packages/codeos", "packages/platform"]
+filterwarnings = ["ignore::DeprecationWarning"]
 markers = [
     "integration: cross-module integration tests",
     "e2e: full end-to-end pipeline tests",
