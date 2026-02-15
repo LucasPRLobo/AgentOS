@@ -29,10 +29,9 @@ export default function DomainPicker() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {packs.map((pack) => (
-          <button
+          <div
             key={pack.name}
-            onClick={() => navigate(`/sessions/new?pack=${pack.name}`)}
-            className="bg-gray-900 border border-gray-800 rounded-xl p-6 text-left hover:border-blue-600 hover:bg-gray-900/80 transition-colors group"
+            className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-blue-600 hover:bg-gray-900/80 transition-colors group"
           >
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 bg-blue-900 rounded-lg flex items-center justify-center text-blue-400 text-lg font-bold">
@@ -46,12 +45,28 @@ export default function DomainPicker() {
               </div>
             </div>
             <p className="text-sm text-gray-400 mb-4">{pack.description}</p>
-            <div className="flex gap-4 text-xs text-gray-500">
+            <div className="flex gap-4 text-xs text-gray-500 mb-4">
               <span>{pack.tool_count} tools</span>
               <span>{pack.role_count} roles</span>
               <span>{pack.workflow_count} workflows</span>
             </div>
-          </button>
+            <div className="flex gap-3">
+              <button
+                onClick={() => navigate(`/workflows/new?pack=${pack.name}`)}
+                className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white
+                           hover:bg-blue-500 transition-colors"
+              >
+                Build Workflow
+              </button>
+              <button
+                onClick={() => navigate(`/sessions/new?pack=${pack.name}`)}
+                className="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300
+                           border border-gray-700 hover:border-gray-600 transition-colors"
+              >
+                Quick Launch
+              </button>
+            </div>
+          </div>
         ))}
       </div>
     </div>
