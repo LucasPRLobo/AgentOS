@@ -186,3 +186,20 @@ class WorkflowValidationResponse(BaseModel):
 
     valid: bool
     issues: list[dict] = Field(default_factory=list)
+
+
+# ── Integrations ──────────────────────────────────────────────────
+
+
+class IntegrationStatusResponse(BaseModel):
+    """Status of a single integration."""
+
+    name: str
+    connected: bool
+    display_name: str = ""
+
+
+class ConnectSlackRequest(BaseModel):
+    """Request body for POST /api/integrations/slack/connect."""
+
+    bot_token: str

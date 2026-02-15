@@ -19,10 +19,12 @@ from agentos.schemas.workflow import WorkflowDefinition
 
 from agentplatform._domain_manifests import register_builtin_packs
 from agentplatform.api_schemas import (
+    ConnectSlackRequest,
     CreateSessionRequest,
     DomainPackDetailResponse,
     DomainPackSummaryResponse,
     EventResponse,
+    IntegrationStatusResponse,
     ModelCapabilitiesResponse,
     ModelListEntry,
     RunWorkflowRequest,
@@ -512,6 +514,56 @@ def create_app(
             }
             for e in events
         ]
+
+    # ── Integration Endpoints ─────────────────────────────────────────
+
+    @app.get("/api/integrations", response_model=list[IntegrationStatusResponse])
+    def list_integrations() -> list[dict[str, Any]]:
+        """List connected integrations and their status."""
+        current: PlatformSettings = app.state.settings
+        return [
+            {
+                "name": "google",
+                "connected": bool(current.google_oauth_token),
+                "display_name": "Google Workspace",
+            },
+            {
+                "name": "slack",
+                "connected": bool(current.slack_bot_token),
+                "display_name": "Slack",
+            },
+        ]
+
+    @app.post("/api/integrations/slack/connect", response_model=IntegrationStatusResponse)
+    def connect_slack(request: ConnectSlackRequest) -> dict[str, Any]:
+        """Save Slack bot token to settings."""
+        updated = app.state.settings_manager.update({"slack_bot_token": request.bot_token})
+        app.state.settings = updated
+        return {
+            "name": "slack",
+            "connected": True,
+            "display_name": "Slack",
+        }
+
+    @app.delete("/api/integrations/{integration_name}/disconnect")
+    def disconnect_integration(integration_name: str) -> dict[str, str]:
+        """Remove an integration's stored credentials."""
+        field_map = {
+            "google": "google_oauth_token",
+            "slack": "slack_bot_token",
+        }
+        field = field_map.get(integration_name)
+        if field is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unknown integration '{integration_name}'",
+            )
+        # Setting to empty string to clear
+        current: PlatformSettings = app.state.settings
+        updated = current.model_copy(update={field: None})
+        app.state.settings_manager.save(updated)
+        app.state.settings = updated
+        return {"status": "disconnected", "integration": integration_name}
 
     # ── WebSocket ────────────────────────────────────────────────────
 
