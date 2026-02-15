@@ -5,6 +5,7 @@ import type {
   DomainPackDetail,
   DomainPackSummary,
   EventResponse,
+  GenerateWorkflowResponse,
   IntegrationStatus,
   ModelCapabilities,
   ModelInfo,
@@ -12,6 +13,7 @@ import type {
   RoleTemplate,
   SessionDetail,
   SessionSummary,
+  TemplateSummary,
   WorkflowDefinition,
   WorkflowSummary,
   WorkflowValidationResult,
@@ -154,6 +156,37 @@ export async function runWorkflow(
   return fetchJSON(`/api/workflows/${id}/run`, {
     method: 'POST',
     body: JSON.stringify({ task_description: taskDescription }),
+  });
+}
+
+// ── Templates ────────────────────────────────────────────────────
+
+export async function listTemplates(
+  domainPack?: string,
+): Promise<TemplateSummary[]> {
+  const qs = domainPack ? `?domain_pack=${encodeURIComponent(domainPack)}` : '';
+  return fetchJSON(`/api/templates${qs}`);
+}
+
+export async function getTemplate(id: string): Promise<WorkflowDefinition> {
+  return fetchJSON(`/api/templates/${id}`);
+}
+
+export async function instantiateTemplate(
+  id: string,
+): Promise<WorkflowSummary> {
+  return fetchJSON(`/api/templates/${id}/instantiate`, { method: 'POST' });
+}
+
+// ── NL Generation ────────────────────────────────────────────────
+
+export async function generateWorkflow(
+  description: string,
+  model = 'gpt-4o-mini',
+): Promise<GenerateWorkflowResponse> {
+  return fetchJSON('/api/workflows/generate', {
+    method: 'POST',
+    body: JSON.stringify({ description, model }),
   });
 }
 

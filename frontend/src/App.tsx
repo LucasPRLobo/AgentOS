@@ -1,9 +1,11 @@
 import { Link, Route, Routes, useLocation } from 'react-router-dom';
+import Home from './pages/Home';
 import DomainPicker from './pages/DomainPicker';
 import TeamBuilder from './pages/TeamBuilder';
 import SessionDashboard from './pages/SessionDashboard';
 import SessionHistory from './pages/SessionHistory';
 import WorkflowBuilder from './pages/WorkflowBuilder';
+import NLCreator from './pages/NLCreator';
 import Settings from './pages/Settings';
 
 function NavLink({ to, label }: { to: string; label: string }) {
@@ -38,7 +40,9 @@ export default function App() {
       </header>
       <main className="p-6">
         <Routes>
-          <Route path="/" element={<DomainPicker />} />
+          <Route path="/" element={<Home />} />
+          <Route path="/packs" element={<DomainPicker />} />
+          <Route path="/nl-creator" element={<NLCreator />} />
           <Route path="/sessions/new" element={<TeamBuilder />} />
           <Route path="/sessions/:id" element={<SessionDashboard />} />
           <Route path="/sessions" element={<SessionHistory />} />

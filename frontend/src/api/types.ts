@@ -221,6 +221,26 @@ export interface PlatformSettings {
   slack_bot_token: string | null;
 }
 
+// ── Templates ───────────────────────────────────────────────────
+
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  agent_count: number;
+  estimated_cost: string;
+  domain_pack: string;
+  tags: string[];
+}
+
+// ── NL Generation ───────────────────────────────────────────────
+
+export interface GenerateWorkflowResponse {
+  workflow: WorkflowDefinition;
+  explanation: string;
+}
+
 // ── Integrations ─────────────────────────────────────────────────
 
 export interface IntegrationStatus {
