@@ -97,6 +97,12 @@ PLATFORM_TOOLS = [
         side_effect="READ",
         factory="agentplatform.tools.slack:SlackReadTool",
     ),
+    ToolManifestEntry(
+        name="workspace_status",
+        description="List all files in the shared workspace with metadata",
+        side_effect="READ",
+        factory="agentplatform.tools.workspace_status:WorkspaceStatusTool",
+    ),
 ]
 
 

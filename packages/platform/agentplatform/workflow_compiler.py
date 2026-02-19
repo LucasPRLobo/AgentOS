@@ -137,9 +137,12 @@ def compile_workflow(
             for tool_name in wf_node.config.tools:
                 if tool_name in tool_entries:
                     try:
+                        load_kwargs: dict[str, Any] = {"workspace": workspace}
+                        if workspace_manifest is not None:
+                            load_kwargs["manifest"] = workspace_manifest
                         tool = domain_registry.load_tool(
                             tool_entries[tool_name],
-                            workspace=workspace,
+                            **load_kwargs,
                         )
                         # Wrap file_write with event emission if manifest available
                         if tool_name == "file_write" and workspace_manifest is not None:
@@ -214,6 +217,8 @@ def compile_workflow(
         _dep_names = {id(node_map[did]): node_names[did] for did in deps[wf_node.id] if did in node_map}
         _output_schemas = list(node_output_schemas)
         _run_id_holder = _current_agent_run_id  # capture mutable ref for closure
+        _manifest_ref = workspace_manifest
+        _wf_node_ref = wf_node
 
         def make_callable(
             r: AgentRunner = _runner,
@@ -223,6 +228,8 @@ def compile_workflow(
             dn: dict[int, str] = _dep_names,
             schemas: list[dict] = _output_schemas,
             run_id_holder: list[RunId] = _run_id_holder,
+            manifest: WorkspaceManifest | None = _manifest_ref,
+            wf_node_cap: Any = _wf_node_ref,
         ) -> Callable[[], Any]:
             def run_agent() -> str | None:
                 # Build full task description at runtime, including predecessor outputs
@@ -241,6 +248,30 @@ def compile_workflow(
                                 f"{dep.result}\n"
                                 f"=== End of '{dep_name}' output ==="
                             )
+
+                # Inject predecessor file context
+                if manifest and dt:
+                    for dep in dt:
+                        dep_name = dn.get(id(dep), dep.name)
+                        dep_files = manifest.files_by_agent(dep_name)
+                        if dep_files:
+                            file_lines = [
+                                f"  - {f.path} ({_format_size(f.size_bytes)})"
+                                for f in dep_files
+                            ]
+                            parts.append(
+                                f"Files produced by '{dep_name}':\n"
+                                + "\n".join(file_lines)
+                            )
+
+                # Inject context_files from TaskDefinition
+                task = getattr(wf_node_cap.config, "task", None)
+                if task and task.context_files:
+                    parts.append(
+                        "Read these workspace files before starting:\n"
+                        + "\n".join(f"  - {f}" for f in task.context_files)
+                    )
+
                 full_desc = "\n\n".join(parts)
 
                 max_retries = 2
@@ -342,3 +373,13 @@ def _build_system_prompt(user_prompt: str, persona_preset: str) -> str:
         parts.append(user_prompt)
 
     return "\n\n".join(parts)
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format file size for human display."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
