@@ -627,6 +627,25 @@ def create_app(
             return "data"
         return "binary"
 
+    def _build_agent_map(session_id: str) -> dict[str, str]:
+        """Build a file_path → agent_name map from WORKSPACE_SNAPSHOT events."""
+        try:
+            events = orchestrator.get_session_events(session_id)
+        except KeyError:
+            return {}
+        agent_map: dict[str, str] = {}
+        for e in events:
+            if e.event_type.value == "WorkspaceSnapshot" and e.payload.get("phase") == "post_run":
+                for f in e.payload.get("files", []):
+                    if f.get("created_by_agent"):
+                        agent_map[f["path"]] = f["created_by_agent"]
+            elif e.event_type.value in ("FileCreated", "FileModified"):
+                fp = e.payload.get("file_path", "")
+                agent = e.payload.get("created_by_agent", "")
+                if fp and agent:
+                    agent_map[fp] = agent
+        return agent_map
+
     @app.get("/api/sessions/{session_id}/files", response_model=FileListResponse)
     def list_session_files(session_id: str) -> dict[str, Any]:
         """List all files in a session's workspace."""
@@ -643,6 +662,8 @@ def create_app(
         if not root.exists():
             return {"files": []}
 
+        agent_map = _build_agent_map(session_id)
+
         entries = []
         for p in sorted(root.rglob("*")):
             if not p.is_file():
@@ -651,13 +672,15 @@ def create_app(
             if any(part.startswith(".") or part in _HIDDEN_FILES for part in p.parts):
                 continue
             rel = p.relative_to(root)
+            rel_str = str(rel)
             stat = p.stat()
             entries.append({
-                "path": str(rel),
+                "path": rel_str,
                 "name": p.name,
                 "size": stat.st_size,
                 "modified": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
                 "type": _classify_file(p.suffix),
+                "created_by_agent": agent_map.get(rel_str, ""),
             })
 
         return {"files": entries}
@@ -705,6 +728,42 @@ def create_app(
             str(resolved),
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{resolved.name}"'},
+        )
+
+    @app.get("/api/sessions/{session_id}/files/download-all")
+    def download_all_files(session_id: str) -> Any:
+        """Download all workspace files as a ZIP archive."""
+        import io
+        import zipfile
+        from pathlib import Path as _Path
+
+        from fastapi.responses import StreamingResponse
+
+        try:
+            root_str = orchestrator.get_session_workspace_root(session_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail=f"Session '{session_id}' not found"
+            )
+
+        root = _Path(root_str)
+        if not root.exists():
+            raise HTTPException(status_code=404, detail="No workspace files")
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in sorted(root.rglob("*")):
+                if not p.is_file():
+                    continue
+                if any(part.startswith(".") or part in _HIDDEN_FILES for part in p.parts):
+                    continue
+                zf.write(p, arcname=str(p.relative_to(root)))
+
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="workspace-{session_id[:12]}.zip"'},
         )
 
     # ── Cost Endpoint ────────────────────────────────────────────────

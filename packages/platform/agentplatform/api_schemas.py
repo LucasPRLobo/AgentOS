@@ -250,6 +250,7 @@ class FileEntry(BaseModel):
     size: int
     modified: str
     type: str = "binary"
+    created_by_agent: str = ""
 
 
 class FileListResponse(BaseModel):

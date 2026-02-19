@@ -258,6 +258,7 @@ export interface FileEntry {
   size: number;
   modified: string;
   type: 'text' | 'image' | 'code' | 'data' | 'binary';
+  created_by_agent?: string;
 }
 
 export interface FileListResponse {

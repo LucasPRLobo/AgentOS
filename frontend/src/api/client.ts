@@ -130,6 +130,10 @@ export function getSessionFileUrl(
   return `/api/sessions/${sessionId}/files/${filePath}`;
 }
 
+export function getSessionFilesZipUrl(sessionId: string): string {
+  return `/api/sessions/${sessionId}/files/download-all`;
+}
+
 // ── Session Cost ─────────────────────────────────────────────────
 
 export async function getSessionCost(
