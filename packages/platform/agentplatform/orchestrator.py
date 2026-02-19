@@ -367,6 +367,7 @@ class SessionOrchestrator:
     ) -> None:
         """Build and execute a DAG from a WorkflowDefinition."""
         from agentplatform.workflow_compiler import compile_workflow
+        from agentos.runtime.workspace_manifest import WorkspaceManifest
 
         config = record.config
         event_log = record.event_log
@@ -389,6 +390,9 @@ class SessionOrchestrator:
             WorkspaceConfig(root=config.workspace_root, allowed_patterns=["**"])
         )
 
+        # Create workspace manifest for file tracking
+        manifest = WorkspaceManifest()
+
         if lm_provider_factory is None:
             raise RuntimeError("No LM provider factory configured")
 
@@ -402,6 +406,7 @@ class SessionOrchestrator:
             stop_event=record.stop_event,
             task_description=config.task_description,
             variable_values=record._variable_values,
+            workspace_manifest=manifest,
         )
 
         executor = DAGExecutor(event_log, max_parallel=config.max_parallel)

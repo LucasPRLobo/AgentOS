@@ -33,6 +33,8 @@ class EventType(StrEnum):
     REPL_EXEC_FINISHED = "REPLExecFinished"
     AGENT_STEP_STARTED = "AgentStepStarted"
     AGENT_STEP_FINISHED = "AgentStepFinished"
+    FILE_CREATED = "FileCreated"
+    FILE_MODIFIED = "FileModified"
     WORKSPACE_SNAPSHOT = "WorkspaceSnapshot"
     SESSION_STARTED = "SessionStarted"
     SESSION_FINISHED = "SessionFinished"
@@ -165,6 +167,32 @@ class AgentStepFinished(BaseEvent):
     """Emitted when an agent step completes."""
 
     event_type: EventType = EventType.AGENT_STEP_FINISHED
+
+
+class FileCreated(BaseEvent):
+    """Emitted when a new file is created in the workspace.
+
+    Payload convention:
+        file_path: str — relative path within workspace
+        size_bytes: int — file size
+        sha256: str — content hash
+        created_by_agent: str — agent that created the file
+    """
+
+    event_type: EventType = EventType.FILE_CREATED
+
+
+class FileModified(BaseEvent):
+    """Emitted when an existing file is modified in the workspace.
+
+    Payload convention:
+        file_path: str — relative path within workspace
+        size_bytes: int — file size
+        sha256: str — content hash
+        created_by_agent: str — agent that modified the file
+    """
+
+    event_type: EventType = EventType.FILE_MODIFIED
 
 
 class WorkspaceSnapshot(BaseEvent):

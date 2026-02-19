@@ -16,6 +16,7 @@ from agentos.runtime.domain_registry import DomainRegistry
 from agentos.runtime.event_log import EventLog
 from agentos.runtime.task import TaskNode
 from agentos.runtime.workspace import Workspace
+from agentos.runtime.workspace_manifest import WorkspaceManifest
 from agentos.schemas.budget import BudgetSpec
 from agentos.schemas.workflow import WorkflowDefinition
 from agentos.tools.registry import ToolRegistry
@@ -92,6 +93,7 @@ def compile_workflow(
     stop_event: threading.Event | None = None,
     task_description: str = "",
     variable_values: dict[str, str] | None = None,
+    workspace_manifest: WorkspaceManifest | None = None,
 ) -> DAGWorkflow:
     """Compile a visual workflow definition into an executable DAG.
 
@@ -125,6 +127,9 @@ def compile_workflow(
         provider = provider_factory(wf_node.config.model)
 
         # Build tool registry for this node
+        # Track the current agent run_id for file event emission
+        _current_agent_run_id: list[RunId] = [rid]  # mutable holder for closure
+
         tool_registry = ToolRegistry()
         if workflow.domain_pack and domain_registry.has_pack(workflow.domain_pack):
             pack = domain_registry.get_pack(workflow.domain_pack)
@@ -136,6 +141,19 @@ def compile_workflow(
                             tool_entries[tool_name],
                             workspace=workspace,
                         )
+                        # Wrap file_write with event emission if manifest available
+                        if tool_name == "file_write" and workspace_manifest is not None:
+                            from agentplatform.tools.workspace_aware import (
+                                EventEmittingFileWriteTool,
+                            )
+
+                            tool = EventEmittingFileWriteTool(
+                                inner=tool,
+                                event_log=event_log,
+                                manifest=workspace_manifest,
+                                run_id_getter=lambda: _current_agent_run_id[0],
+                                agent_name=wf_node.display_name,
+                            )
                         tool_registry.register(tool)
                     except Exception as exc:
                         logger.warning(
@@ -195,6 +213,7 @@ def compile_workflow(
         _dep_tasks = list(dep_tasks)  # snapshot
         _dep_names = {id(node_map[did]): node_names[did] for did in deps[wf_node.id] if did in node_map}
         _output_schemas = list(node_output_schemas)
+        _run_id_holder = _current_agent_run_id  # capture mutable ref for closure
 
         def make_callable(
             r: AgentRunner = _runner,
@@ -203,6 +222,7 @@ def compile_workflow(
             dt: list[TaskNode] = _dep_tasks,
             dn: dict[int, str] = _dep_names,
             schemas: list[dict] = _output_schemas,
+            run_id_holder: list[RunId] = _run_id_holder,
         ) -> Callable[[], Any]:
             def run_agent() -> str | None:
                 # Build full task description at runtime, including predecessor outputs
@@ -226,6 +246,7 @@ def compile_workflow(
                 max_retries = 2
                 for attempt in range(max_retries + 1):
                     agent_run_id = generate_run_id()
+                    run_id_holder[0] = agent_run_id  # update for file event emission
                     task_desc = full_desc
                     if attempt > 0:
                         # Add feedback about schema violation
