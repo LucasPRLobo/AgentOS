@@ -241,6 +241,20 @@ export interface GenerateWorkflowResponse {
   explanation: string;
 }
 
+// ── File Access ──────────────────────────────────────────────────
+
+export interface FileEntry {
+  path: string;
+  name: string;
+  size: number;
+  modified: string;
+  type: 'text' | 'image' | 'code' | 'data' | 'binary';
+}
+
+export interface FileListResponse {
+  files: FileEntry[];
+}
+
 // ── Integrations ─────────────────────────────────────────────────
 
 export interface IntegrationStatus {

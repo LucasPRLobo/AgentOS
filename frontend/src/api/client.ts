@@ -5,6 +5,7 @@ import type {
   DomainPackDetail,
   DomainPackSummary,
   EventResponse,
+  FileListResponse,
   GenerateWorkflowResponse,
   IntegrationStatus,
   ModelCapabilities,
@@ -102,6 +103,30 @@ export async function getSessionEvents(
   offset = 0,
 ): Promise<EventResponse[]> {
   return fetchJSON(`/api/sessions/${id}/events?offset=${offset}`);
+}
+
+// ── Session Files ────────────────────────────────────────────────
+
+export async function getSessionFiles(
+  sessionId: string,
+): Promise<FileListResponse> {
+  return fetchJSON(`/api/sessions/${sessionId}/files`);
+}
+
+export async function getSessionFileContent(
+  sessionId: string,
+  filePath: string,
+): Promise<string> {
+  const resp = await fetch(`/api/sessions/${sessionId}/files/${filePath}`);
+  if (!resp.ok) throw new Error(`Failed to fetch file: ${resp.status}`);
+  return resp.text();
+}
+
+export function getSessionFileUrl(
+  sessionId: string,
+  filePath: string,
+): string {
+  return `/api/sessions/${sessionId}/files/${filePath}`;
 }
 
 // ── Workflows ────────────────────────────────────────────────────

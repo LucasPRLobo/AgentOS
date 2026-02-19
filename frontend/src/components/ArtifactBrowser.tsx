@@ -1,107 +1,164 @@
-/** ArtifactBrowser — displays files produced during a session. */
+/** ArtifactBrowser — real file browser backed by workspace API. */
 
-import { useState } from 'react';
-import type { EventResponse } from '../api/types';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  getSessionFiles,
+  getSessionFileContent,
+  getSessionFileUrl,
+} from '../api/client';
+import type { EventResponse, FileEntry } from '../api/types';
 
-interface ArtifactEntry {
-  name: string;
-  type: 'file' | 'write';
-  agent: string;
-  timestamp: string;
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function extractArtifacts(events: EventResponse[]): ArtifactEntry[] {
-  const artifacts: ArtifactEntry[] = [];
-  const seen = new Set<string>();
-
-  for (const e of events) {
-    if (e.event_type !== 'ToolCallFinished') continue;
-    const toolName = e.payload.tool_name as string | undefined;
-    if (!toolName) continue;
-
-    // Detect file-writing tools
-    if (
-      toolName === 'file_write' ||
-      toolName === 'google_docs_write' ||
-      toolName === 'google_sheets_write'
-    ) {
-      const output = e.payload.output as string | undefined;
-      const fileName =
-        (e.payload.file_path as string) ||
-        (e.payload.path as string) ||
-        output?.match(/(?:saved?|wro?te?|created?)\s+(?:to\s+)?["']?([^\s"']+)/i)?.[1] ||
-        `artifact_${artifacts.length + 1}`;
-
-      if (!seen.has(fileName)) {
-        seen.add(fileName);
-        artifacts.push({
-          name: fileName,
-          type: 'file',
-          agent: (e.payload.agent_role as string) || 'unknown',
-          timestamp: e.timestamp,
-        });
-      }
-    }
-  }
-
-  return artifacts;
-}
-
-const FILE_ICONS: Record<string, string> = {
-  md: 'text-blue-400',
-  txt: 'text-gray-400',
-  py: 'text-yellow-400',
-  json: 'text-green-400',
-  csv: 'text-cyan-400',
-  png: 'text-purple-400',
+const TYPE_ICONS: Record<string, string> = {
+  text: 'text-blue-400',
+  code: 'text-yellow-400',
+  image: 'text-purple-400',
+  data: 'text-cyan-400',
+  binary: 'text-gray-500',
 };
 
-function getFileColor(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase() ?? '';
-  return FILE_ICONS[ext] ?? 'text-gray-400';
-}
+const TYPE_LABELS: Record<string, string> = {
+  text: '\u25A0',
+  code: '\u25C6',
+  image: '\u25CF',
+  data: '\u25B2',
+  binary: '\u25CB',
+};
 
 interface Props {
   events: EventResponse[];
+  sessionId: string;
 }
 
-export default function ArtifactBrowser({ events }: Props) {
-  const artifacts = extractArtifacts(events);
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+export default function ArtifactBrowser({ events: _events, sessionId }: Props) {
+  void _events; // kept for interface compatibility
+  const [files, setFiles] = useState<FileEntry[]>([]);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
-  if (artifacts.length === 0) {
+  // Fetch file list on mount + poll every 3s
+  const fetchFiles = useCallback(() => {
+    if (!sessionId) return;
+    getSessionFiles(sessionId)
+      .then((resp) => setFiles(resp.files))
+      .catch(() => {});
+  }, [sessionId]);
+
+  useEffect(() => {
+    fetchFiles();
+    const interval = setInterval(fetchFiles, 3000);
+    return () => clearInterval(interval);
+  }, [fetchFiles]);
+
+  // Load file content on selection
+  useEffect(() => {
+    if (!selectedFile) {
+      setPreview(null);
+      return;
+    }
+
+    const file = files.find((f) => f.path === selectedFile);
+    if (!file) return;
+
+    if (file.type === 'image') {
+      // Images are shown via <img> tag, no need to fetch content
+      setPreview(null);
+      return;
+    }
+
+    if (file.type === 'binary') {
+      setPreview(null);
+      return;
+    }
+
+    // Fetch text content
+    setLoadingPreview(true);
+    getSessionFileContent(sessionId, file.path)
+      .then(setPreview)
+      .catch(() => setPreview('Failed to load file content.'))
+      .finally(() => setLoadingPreview(false));
+  }, [selectedFile, sessionId, files]);
+
+  if (files.length === 0) {
     return (
       <div className="text-xs text-gray-600 text-center py-4">
-        No artifacts produced yet.
+        No files produced yet.
       </div>
     );
   }
 
+  const selected = files.find((f) => f.path === selectedFile);
+
   return (
-    <div className="space-y-1">
-      {artifacts.map((art, i) => (
-        <button
-          key={`${art.name}-${i}`}
-          onClick={() => setSelectedIdx(selectedIdx === i ? null : i)}
-          className={`w-full text-left px-3 py-2 rounded text-xs transition-colors ${
-            selectedIdx === i
-              ? 'bg-gray-700 border border-gray-600'
-              : 'hover:bg-gray-800'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <span className={getFileColor(art.name)}>
-              {art.name.split('/').pop()}
+    <div className="flex h-full gap-3">
+      {/* File list */}
+      <div className="w-1/3 min-w-[180px] overflow-y-auto space-y-1">
+        {files.map((file) => (
+          <div
+            key={file.path}
+            className={`flex items-center gap-2 px-3 py-2 rounded text-xs cursor-pointer transition-colors ${
+              selectedFile === file.path
+                ? 'bg-gray-700 border border-gray-600'
+                : 'hover:bg-gray-800'
+            }`}
+            onClick={() =>
+              setSelectedFile(selectedFile === file.path ? null : file.path)
+            }
+          >
+            <span className={TYPE_ICONS[file.type] ?? 'text-gray-500'}>
+              {TYPE_LABELS[file.type] ?? '\u25CB'}
             </span>
-            <span className="text-gray-600 ml-auto">{art.agent}</span>
+            <span className="text-gray-200 truncate flex-1">{file.name}</span>
+            <span className="text-gray-600 whitespace-nowrap">
+              {formatSize(file.size)}
+            </span>
+            <a
+              href={getSessionFileUrl(sessionId, file.path)}
+              download={file.name}
+              onClick={(e) => e.stopPropagation()}
+              className="text-gray-600 hover:text-blue-400 transition-colors"
+              title="Download"
+            >
+              {'\u2193'}
+            </a>
           </div>
-          {selectedIdx === i && (
-            <div className="mt-1 text-[10px] text-gray-500">
-              Full path: {art.name}
-            </div>
-          )}
-        </button>
-      ))}
+        ))}
+      </div>
+
+      {/* Preview panel */}
+      <div className="flex-1 overflow-y-auto border-l border-gray-800 pl-3">
+        {!selected ? (
+          <div className="text-xs text-gray-600 text-center py-8">
+            Click a file to preview
+          </div>
+        ) : selected.type === 'image' ? (
+          <div className="flex items-center justify-center h-full">
+            <img
+              src={getSessionFileUrl(sessionId, selected.path)}
+              alt={selected.name}
+              className="max-w-full max-h-full object-contain rounded"
+            />
+          </div>
+        ) : selected.type === 'binary' ? (
+          <div className="text-xs text-gray-500 text-center py-8">
+            Binary file — download only
+          </div>
+        ) : loadingPreview ? (
+          <div className="text-xs text-gray-500 text-center py-8">
+            Loading...
+          </div>
+        ) : (
+          <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-words">
+            {preview}
+          </pre>
+        )}
+      </div>
     </div>
   );
 }

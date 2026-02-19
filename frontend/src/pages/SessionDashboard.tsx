@@ -230,7 +230,7 @@ export default function SessionDashboard() {
           {activeTab === 'events' ? (
             <EventLog events={events} />
           ) : (
-            <ArtifactBrowser events={events} />
+            <ArtifactBrowser events={events} sessionId={id!} />
           )}
         </div>
       </div>
