@@ -255,6 +255,24 @@ export interface FileListResponse {
   files: FileEntry[];
 }
 
+// ── Cost ─────────────────────────────────────────────────────────
+
+export interface ModelCostBreakdown {
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+export interface SessionCost {
+  total_cost_usd: number;
+  total_tokens: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  by_model: ModelCostBreakdown[];
+}
+
 // ── Integrations ─────────────────────────────────────────────────
 
 export interface IntegrationStatus {

@@ -35,6 +35,7 @@ import type {
   WorkflowNode,
   WorkflowNodeConfig,
   WorkflowValidationResult,
+  WorkflowVariable,
 } from '../api/types';
 
 import AgentNode, { type AgentNodeData } from '../components/builder/AgentNode';
@@ -43,6 +44,7 @@ import ErrorBanner from '../components/ErrorBanner';
 import NodePalette from '../components/builder/NodePalette';
 import Spinner from '../components/Spinner';
 import Toolbar from '../components/builder/Toolbar';
+import VariableInputModal from '../components/builder/VariableInputModal';
 
 const NODE_TYPES = { agentNode: AgentNode };
 
@@ -99,8 +101,10 @@ export default function WorkflowBuilder() {
   const [workflowName, setWorkflowName] = useState('Untitled Workflow');
   const [workflowDescription, setWorkflowDescription] = useState('');
   const [workflowNodes, setWorkflowNodes] = useState<WorkflowNode[]>([]);
+  const [workflowVariables, setWorkflowVariables] = useState<WorkflowVariable[]>([]);
   const [isSaved, setIsSaved] = useState(!isNew);
   const [validationResult, setValidationResult] = useState<WorkflowValidationResult | null>(null);
+  const [showVariableModal, setShowVariableModal] = useState(false);
 
   // React Flow state
   const [rfNodes, setNodes, onNodesChange] = useNodesState<Node>([] as Node[]);
@@ -130,6 +134,7 @@ export default function WorkflowBuilder() {
           setWorkflowName(wf.name);
           setWorkflowDescription(wf.description);
           setWorkflowNodes(wf.nodes);
+          setWorkflowVariables(wf.variables ?? []);
           setNodes(toNodes(wf.nodes, null));
           setRFEdges(
             wf.edges.map((e) => ({
@@ -278,7 +283,7 @@ export default function WorkflowBuilder() {
       version: '1.0.0',
       nodes: workflowNodes,
       edges: rfEdges.map((e) => ({ source: e.source, target: e.target })),
-      variables: [],
+      variables: workflowVariables,
       created_at: now,
       updated_at: now,
       template_source: null,
@@ -302,9 +307,19 @@ export default function WorkflowBuilder() {
 
   async function handleRun() {
     await handleSave();
+    // If workflow has variables, show input modal instead of running immediately
+    if (workflowVariables.length > 0) {
+      setShowVariableModal(true);
+      return;
+    }
+    await executeRun({});
+  }
+
+  async function executeRun(variableValues: Record<string, string>) {
     try {
       setActionError('');
-      const result = await runWorkflow(workflowId);
+      setShowVariableModal(false);
+      const result = await runWorkflow(workflowId, '', variableValues);
       navigate(`/sessions/${result.session_id}`);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Failed to run workflow');
@@ -422,6 +437,15 @@ export default function WorkflowBuilder() {
       </div>
 
       {/* Validation issues toast */}
+      {/* Variable input modal */}
+      {showVariableModal && (
+        <VariableInputModal
+          variables={workflowVariables}
+          onRun={executeRun}
+          onCancel={() => setShowVariableModal(false)}
+        />
+      )}
+
       {validationResult && !validationResult.valid && (
         <div className="absolute bottom-4 right-4 max-w-sm bg-gray-900 border border-red-500/50
                         rounded-lg p-4 shadow-lg z-50">

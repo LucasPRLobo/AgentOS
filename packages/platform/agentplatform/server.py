@@ -393,7 +393,9 @@ def create_app(
 
         try:
             sid = orchestrator.create_session_from_workflow(
-                workflow, task_description=request.task_description
+                workflow,
+                task_description=request.task_description,
+                variable_values=request.variable_values,
             )
             orchestrator.start_workflow_session(sid)
         except RuntimeError as e:

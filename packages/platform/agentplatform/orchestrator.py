@@ -52,6 +52,7 @@ class _SessionRecord:
         "stop_event",
         "error",
         "_workflow",
+        "_variable_values",
     )
 
     def __init__(self, config: SessionConfig, event_log: EventLog, run_id: RunId) -> None:
@@ -64,6 +65,7 @@ class _SessionRecord:
         self.stop_event = threading.Event()
         self.error: str | None = None
         self._workflow: Any = None
+        self._variable_values: dict[str, str] = {}
 
 
 class SessionOrchestrator:
@@ -281,6 +283,7 @@ class SessionOrchestrator:
         self,
         workflow: "WorkflowDefinition",
         task_description: str = "",
+        variable_values: dict[str, str] | None = None,
     ) -> str:
         """Create and prepare a session from a WorkflowDefinition.
 
@@ -317,6 +320,7 @@ class SessionOrchestrator:
         record = _SessionRecord(config, event_log, run_id)
         # Store the workflow on the record for compilation during start
         record._workflow = workflow
+        record._variable_values = variable_values or {}
 
         with self._lock:
             self._sessions[config.session_id] = record
@@ -397,6 +401,7 @@ class SessionOrchestrator:
             run_id=run_id,
             stop_event=record.stop_event,
             task_description=config.task_description,
+            variable_values=record._variable_values,
         )
 
         executor = DAGExecutor(event_log, max_parallel=config.max_parallel)

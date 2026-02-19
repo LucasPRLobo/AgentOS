@@ -1,14 +1,15 @@
 /** SessionDashboard — real-time monitoring of a running session. */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   getSession,
+  getSessionCost,
   getSessionEvents,
   stopSession,
   EventStreamClient,
 } from '../api/client';
-import type { EventResponse, SessionDetail } from '../api/types';
+import type { EventResponse, SessionCost, SessionDetail } from '../api/types';
 import ArtifactBrowser from '../components/ArtifactBrowser';
 import DagGraph from '../components/DagGraph';
 import ErrorBanner from '../components/ErrorBanner';
@@ -23,31 +24,10 @@ const STATE_BADGES: Record<string, string> = {
   STOPPED: 'bg-yellow-600 text-white',
 };
 
-/** Estimate token cost from events (rough heuristic). */
-function estimateCost(events: EventResponse[]): {
-  totalTokens: number;
-  toolCalls: number;
-} {
-  let totalTokens = 0;
-  let toolCalls = 0;
-
-  for (const e of events) {
-    if (e.event_type === 'ToolCallFinished') {
-      toolCalls++;
-    }
-    if (
-      e.event_type === 'LMResponseReceived' ||
-      e.event_type === 'AgentStepCompleted'
-    ) {
-      const tokens =
-        (e.payload.tokens_used as number) ||
-        (e.payload.prompt_tokens as number ?? 0) +
-          (e.payload.completion_tokens as number ?? 0);
-      if (tokens > 0) totalTokens += tokens;
-    }
-  }
-
-  return { totalTokens, toolCalls };
+function formatCost(usd: number): string {
+  if (usd === 0) return '$0.00';
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 export default function SessionDashboard() {
@@ -58,6 +38,7 @@ export default function SessionDashboard() {
   const [activeTab, setActiveTab] = useState<'events' | 'artifacts'>('events');
   const [fetchError, setFetchError] = useState('');
   const [stopError, setStopError] = useState('');
+  const [sessionCost, setSessionCost] = useState<SessionCost | null>(null);
   const streamRef = useRef<EventStreamClient | null>(null);
   const startTime = useRef(Date.now());
 
@@ -108,6 +89,16 @@ export default function SessionDashboard() {
     return () => clearInterval(interval);
   }, [id]);
 
+  // Poll cost
+  useEffect(() => {
+    if (!id) return;
+    getSessionCost(id).then(setSessionCost).catch(() => {});
+    const interval = setInterval(() => {
+      getSessionCost(id).then(setSessionCost).catch(() => {});
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [id]);
+
   const handleStop = useCallback(async () => {
     if (id) {
       setStopError('');
@@ -120,7 +111,7 @@ export default function SessionDashboard() {
     }
   }, [id]);
 
-  const cost = useMemo(() => estimateCost(events), [events]);
+  const toolCalls = events.filter((e) => e.event_type === 'ToolCallFinished').length;
 
   if (fetchError) {
     return (
@@ -177,10 +168,11 @@ export default function SessionDashboard() {
         <div className="flex items-center gap-4">
           {/* Cost/token display */}
           <div className="flex gap-3 text-xs text-gray-500">
-            {cost.totalTokens > 0 && (
-              <span>{cost.totalTokens.toLocaleString()} tokens</span>
+            <span>{formatCost(sessionCost?.total_cost_usd ?? 0)} cost</span>
+            {(sessionCost?.total_tokens ?? 0) > 0 && (
+              <span>{(sessionCost?.total_tokens ?? 0).toLocaleString()} tokens</span>
             )}
-            <span>{cost.toolCalls} tool calls</span>
+            <span>{toolCalls} tool calls</span>
             <span>{events.length} events</span>
           </div>
           {session.state === 'RUNNING' && (

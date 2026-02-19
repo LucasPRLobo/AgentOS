@@ -91,6 +91,7 @@ def compile_workflow(
     run_id: RunId | None = None,
     stop_event: threading.Event | None = None,
     task_description: str = "",
+    variable_values: dict[str, str] | None = None,
 ) -> DAGWorkflow:
     """Compile a visual workflow definition into an executable DAG.
 
@@ -105,7 +106,7 @@ def compile_workflow(
     rid = run_id or generate_run_id()
 
     # Build workflow-level context from variables and task_description
-    workflow_context = _build_workflow_context(workflow, task_description)
+    workflow_context = _build_workflow_context(workflow, task_description, variable_values)
 
     # Build node lookup and tool registry per node
     node_map: dict[str, TaskNode] = {}
@@ -272,18 +273,24 @@ def compile_workflow(
     return dag
 
 
-def _build_workflow_context(workflow: WorkflowDefinition, task_description: str) -> str:
+def _build_workflow_context(
+    workflow: WorkflowDefinition,
+    task_description: str,
+    variable_values: dict[str, str] | None = None,
+) -> str:
     """Build workflow-level context string from variables and task description."""
     parts: list[str] = []
+    vals = variable_values or {}
 
     if task_description:
         parts.append(f"Task: {task_description}")
 
-    # Include workflow variables with their values (defaults)
+    # Include workflow variables — user-provided values override defaults
     var_lines = []
     for var in workflow.variables:
-        if var.default:
-            var_lines.append(f"- {var.name}: {var.default}")
+        value = vals.get(var.name, var.default)
+        if value:
+            var_lines.append(f"- {var.name}: {value}")
     if var_lines:
         parts.append("Workflow parameters:\n" + "\n".join(var_lines))
 

@@ -12,6 +12,7 @@ import type {
   ModelInfo,
   PlatformSettings,
   RoleTemplate,
+  SessionCost,
   SessionDetail,
   SessionSummary,
   TemplateSummary,
@@ -129,6 +130,14 @@ export function getSessionFileUrl(
   return `/api/sessions/${sessionId}/files/${filePath}`;
 }
 
+// ── Session Cost ─────────────────────────────────────────────────
+
+export async function getSessionCost(
+  sessionId: string,
+): Promise<SessionCost> {
+  return fetchJSON(`/api/sessions/${sessionId}/cost`);
+}
+
 // ── Workflows ────────────────────────────────────────────────────
 
 export async function listWorkflows(): Promise<WorkflowSummary[]> {
@@ -177,10 +186,14 @@ export async function validateWorkflow(
 export async function runWorkflow(
   id: string,
   taskDescription = '',
+  variableValues: Record<string, string> = {},
 ): Promise<{ session_id: string; state: string }> {
   return fetchJSON(`/api/workflows/${id}/run`, {
     method: 'POST',
-    body: JSON.stringify({ task_description: taskDescription }),
+    body: JSON.stringify({
+      task_description: taskDescription,
+      variable_values: variableValues,
+    }),
   });
 }
 

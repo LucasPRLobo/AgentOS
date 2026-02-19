@@ -172,6 +172,7 @@ class RunWorkflowRequest(BaseModel):
 
     task_description: str = ""
     max_parallel: int = 1
+    variable_values: dict[str, str] = Field(default_factory=dict)
 
 
 class RunWorkflowResponse(BaseModel):
