@@ -107,6 +107,15 @@ def compile_workflow(
     """
     rid = run_id or generate_run_id()
 
+    # Dedicated run_id + seq counter for file events (avoids collisions with agent seq)
+    _file_event_run_id: RunId | None = None
+    _file_event_seq: Any = None
+    if workspace_manifest is not None:
+        from agentplatform.tools.workspace_aware import FileEventSeqCounter
+
+        _file_event_run_id = generate_run_id()
+        _file_event_seq = FileEventSeqCounter()
+
     # Build workflow-level context from variables and task_description
     workflow_context = _build_workflow_context(workflow, task_description, variable_values)
 
@@ -127,9 +136,6 @@ def compile_workflow(
         provider = provider_factory(wf_node.config.model)
 
         # Build tool registry for this node
-        # Track the current agent run_id for file event emission
-        _current_agent_run_id: list[RunId] = [rid]  # mutable holder for closure
-
         tool_registry = ToolRegistry()
         if workflow.domain_pack and domain_registry.has_pack(workflow.domain_pack):
             pack = domain_registry.get_pack(workflow.domain_pack)
@@ -145,7 +151,11 @@ def compile_workflow(
                             **load_kwargs,
                         )
                         # Wrap file_write with event emission if manifest available
-                        if tool_name == "file_write" and workspace_manifest is not None:
+                        if (
+                            tool_name == "file_write"
+                            and workspace_manifest is not None
+                            and _file_event_run_id is not None
+                        ):
                             from agentplatform.tools.workspace_aware import (
                                 EventEmittingFileWriteTool,
                             )
@@ -154,7 +164,8 @@ def compile_workflow(
                                 inner=tool,
                                 event_log=event_log,
                                 manifest=workspace_manifest,
-                                run_id_getter=lambda: _current_agent_run_id[0],
+                                workspace_run_id=_file_event_run_id,
+                                seq_counter=_file_event_seq,
                                 agent_name=wf_node.display_name,
                             )
                         tool_registry.register(tool)
@@ -238,7 +249,6 @@ def compile_workflow(
         _dep_tasks = list(dep_tasks)  # snapshot
         _dep_names = {id(node_map[did]): node_names[did] for did in deps[wf_node.id] if did in node_map}
         _output_schemas = list(node_output_schemas)
-        _run_id_holder = _current_agent_run_id  # capture mutable ref for closure
         _manifest_ref = workspace_manifest
         _wf_node_ref = wf_node
 
@@ -249,7 +259,6 @@ def compile_workflow(
             dt: list[TaskNode] = _dep_tasks,
             dn: dict[int, str] = _dep_names,
             schemas: list[dict] = _output_schemas,
-            run_id_holder: list[RunId] = _run_id_holder,
             manifest: WorkspaceManifest | None = _manifest_ref,
             wf_node_cap: Any = _wf_node_ref,
         ) -> Callable[[], Any]:
@@ -299,7 +308,6 @@ def compile_workflow(
                 max_retries = 2
                 for attempt in range(max_retries + 1):
                     agent_run_id = generate_run_id()
-                    run_id_holder[0] = agent_run_id  # update for file event emission
                     task_desc = full_desc
                     if attempt > 0:
                         # Add feedback about schema violation

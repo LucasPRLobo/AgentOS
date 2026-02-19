@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
-from typing import Callable
+import threading
 
 from pydantic import BaseModel
 
-from agentos.core.identifiers import RunId, generate_run_id
+from agentos.core.identifiers import RunId
 from agentos.runtime.event_log import EventLog
 from agentos.runtime.workspace_manifest import WorkspaceManifest
 from agentos.schemas.events import FileCreated, FileModified
 from agentos.tools.base import BaseTool, SideEffect
+
+
+class FileEventSeqCounter:
+    """Thread-safe sequence counter for file events (shared across wrappers)."""
+
+    def __init__(self) -> None:
+        self._value = 0
+        self._lock = threading.Lock()
+
+    def next(self) -> int:
+        with self._lock:
+            v = self._value
+            self._value += 1
+            return v
 
 
 class EventEmittingFileWriteTool(BaseTool):
@@ -21,13 +35,15 @@ class EventEmittingFileWriteTool(BaseTool):
         inner: BaseTool,
         event_log: EventLog,
         manifest: WorkspaceManifest,
-        run_id_getter: Callable[[], RunId],
+        workspace_run_id: RunId,
+        seq_counter: FileEventSeqCounter,
         agent_name: str,
     ) -> None:
         self._inner = inner
         self._event_log = event_log
         self._manifest = manifest
-        self._run_id_getter = run_id_getter
+        self._ws_run_id = workspace_run_id
+        self._seq = seq_counter
         self._agent_name = agent_name
 
     @property
@@ -66,17 +82,11 @@ class EventEmittingFileWriteTool(BaseTool):
                 agent_name=self._agent_name,
             )
 
-            run_id = self._run_id_getter()
             event_cls = FileCreated if is_new else FileModified
-
-            # Get next seq for this run_id
-            events = self._event_log.replay(run_id)
-            next_seq = max((e.seq for e in events), default=-1) + 1
-
             self._event_log.append(
                 event_cls(
-                    run_id=run_id,
-                    seq=next_seq,
+                    run_id=self._ws_run_id,
+                    seq=self._seq.next(),
                     payload={
                         "file_path": file_path,
                         "size_bytes": size_bytes,

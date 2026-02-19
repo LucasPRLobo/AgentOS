@@ -668,10 +668,10 @@ def create_app(
         for p in sorted(root.rglob("*")):
             if not p.is_file():
                 continue
-            # Skip hidden files and internal files
-            if any(part.startswith(".") or part in _HIDDEN_FILES for part in p.parts):
-                continue
             rel = p.relative_to(root)
+            # Skip hidden files and internal files (check relative parts only)
+            if any(part.startswith(".") or part in _HIDDEN_FILES for part in rel.parts):
+                continue
             rel_str = str(rel)
             stat = p.stat()
             entries.append({
@@ -755,9 +755,10 @@ def create_app(
             for p in sorted(root.rglob("*")):
                 if not p.is_file():
                     continue
-                if any(part.startswith(".") or part in _HIDDEN_FILES for part in p.parts):
+                rel = p.relative_to(root)
+                if any(part.startswith(".") or part in _HIDDEN_FILES for part in rel.parts):
                     continue
-                zf.write(p, arcname=str(p.relative_to(root)))
+                zf.write(p, arcname=str(rel))
 
         buf.seek(0)
         return StreamingResponse(

@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from agentos.core.identifiers import RunId, generate_run_id
 from agentos.runtime.event_log import SQLiteEventLog
 from agentos.runtime.workspace_manifest import WorkspaceManifest
 from agentos.schemas.events import EventType
 from agentos.tools.base import BaseTool, SideEffect
-from agentplatform.tools.workspace_aware import EventEmittingFileWriteTool
+from agentplatform.tools.workspace_aware import (
+    EventEmittingFileWriteTool,
+    FileEventSeqCounter,
+)
 
 
 class _FakeWriteInput(BaseModel):
@@ -73,30 +74,36 @@ def manifest() -> WorkspaceManifest:
 
 
 @pytest.fixture()
-def run_id() -> RunId:
+def ws_run_id() -> RunId:
     return generate_run_id()
 
 
+@pytest.fixture()
+def seq_counter() -> FileEventSeqCounter:
+    return FileEventSeqCounter()
+
+
 class TestEventEmittingFileWriteTool:
-    def test_new_file_emits_file_created(self, event_log, manifest, run_id) -> None:
+    def test_new_file_emits_file_created(self, event_log, manifest, ws_run_id, seq_counter) -> None:
         inner = _FakeFileWriteTool()
         wrapper = EventEmittingFileWriteTool(
             inner=inner,
             event_log=event_log,
             manifest=manifest,
-            run_id_getter=lambda: run_id,
+            workspace_run_id=ws_run_id,
+            seq_counter=seq_counter,
             agent_name="Writer",
         )
         output = wrapper.execute(_FakeWriteInput(path="report.md", content="hello"))
         assert output.path == "report.md"
 
-        events = event_log.replay(run_id)
+        events = event_log.replay(ws_run_id)
         assert len(events) == 1
         assert events[0].event_type == EventType.FILE_CREATED
         assert events[0].payload["file_path"] == "report.md"
         assert events[0].payload["created_by_agent"] == "Writer"
 
-    def test_existing_file_emits_file_modified(self, event_log, manifest, run_id) -> None:
+    def test_existing_file_emits_file_modified(self, event_log, manifest, ws_run_id, seq_counter) -> None:
         # Pre-record the file
         manifest.record_file("report.md", 100, "old_sha", "Writer")
 
@@ -105,22 +112,24 @@ class TestEventEmittingFileWriteTool:
             inner=inner,
             event_log=event_log,
             manifest=manifest,
-            run_id_getter=lambda: run_id,
+            workspace_run_id=ws_run_id,
+            seq_counter=seq_counter,
             agent_name="Editor",
         )
         wrapper.execute(_FakeWriteInput(path="report.md", content="updated"))
 
-        events = event_log.replay(run_id)
+        events = event_log.replay(ws_run_id)
         assert len(events) == 1
         assert events[0].event_type == EventType.FILE_MODIFIED
 
-    def test_manifest_updated_after_write(self, event_log, manifest, run_id) -> None:
+    def test_manifest_updated_after_write(self, event_log, manifest, ws_run_id, seq_counter) -> None:
         inner = _FakeFileWriteTool()
         wrapper = EventEmittingFileWriteTool(
             inner=inner,
             event_log=event_log,
             manifest=manifest,
-            run_id_getter=lambda: run_id,
+            workspace_run_id=ws_run_id,
+            seq_counter=seq_counter,
             agent_name="Writer",
         )
         wrapper.execute(_FakeWriteInput(path="data.csv", content="a,b,c"))
@@ -130,28 +139,30 @@ class TestEventEmittingFileWriteTool:
         assert entry.size_bytes == 42
         assert entry.created_by_agent == "Writer"
 
-    def test_error_no_event_emitted(self, event_log, manifest, run_id) -> None:
+    def test_error_no_event_emitted(self, event_log, manifest, ws_run_id, seq_counter) -> None:
         inner = _FakeFileWriteTool(should_fail=True)
         wrapper = EventEmittingFileWriteTool(
             inner=inner,
             event_log=event_log,
             manifest=manifest,
-            run_id_getter=lambda: run_id,
+            workspace_run_id=ws_run_id,
+            seq_counter=seq_counter,
             agent_name="Writer",
         )
         with pytest.raises(RuntimeError, match="Write failed"):
             wrapper.execute(_FakeWriteInput(path="bad.txt"))
 
-        events = event_log.replay(run_id)
+        events = event_log.replay(ws_run_id)
         assert len(events) == 0
 
-    def test_delegates_properties(self, event_log, manifest, run_id) -> None:
+    def test_delegates_properties(self, event_log, manifest, ws_run_id, seq_counter) -> None:
         inner = _FakeFileWriteTool()
         wrapper = EventEmittingFileWriteTool(
             inner=inner,
             event_log=event_log,
             manifest=manifest,
-            run_id_getter=lambda: run_id,
+            workspace_run_id=ws_run_id,
+            seq_counter=seq_counter,
             agent_name="Writer",
         )
         assert wrapper.name == "file_write"
@@ -160,19 +171,41 @@ class TestEventEmittingFileWriteTool:
         assert wrapper.input_schema is _FakeWriteInput
         assert wrapper.output_schema is _FakeWriteOutput
 
-    def test_multiple_writes_increment_seq(self, event_log, manifest, run_id) -> None:
+    def test_multiple_writes_increment_seq(self, event_log, manifest, ws_run_id, seq_counter) -> None:
         inner = _FakeFileWriteTool()
         wrapper = EventEmittingFileWriteTool(
             inner=inner,
             event_log=event_log,
             manifest=manifest,
-            run_id_getter=lambda: run_id,
+            workspace_run_id=ws_run_id,
+            seq_counter=seq_counter,
             agent_name="Writer",
         )
         wrapper.execute(_FakeWriteInput(path="a.txt", content="a"))
         wrapper.execute(_FakeWriteInput(path="b.txt", content="b"))
 
-        events = event_log.replay(run_id)
+        events = event_log.replay(ws_run_id)
+        assert len(events) == 2
+        assert events[0].seq == 0
+        assert events[1].seq == 1
+
+    def test_shared_counter_across_wrappers(self, event_log, manifest, ws_run_id, seq_counter) -> None:
+        """Multiple wrappers sharing a counter don't collide."""
+        inner = _FakeFileWriteTool()
+        wrapper_a = EventEmittingFileWriteTool(
+            inner=inner, event_log=event_log, manifest=manifest,
+            workspace_run_id=ws_run_id, seq_counter=seq_counter,
+            agent_name="Agent A",
+        )
+        wrapper_b = EventEmittingFileWriteTool(
+            inner=inner, event_log=event_log, manifest=manifest,
+            workspace_run_id=ws_run_id, seq_counter=seq_counter,
+            agent_name="Agent B",
+        )
+        wrapper_a.execute(_FakeWriteInput(path="a.txt", content="a"))
+        wrapper_b.execute(_FakeWriteInput(path="b.txt", content="b"))
+
+        events = event_log.replay(ws_run_id)
         assert len(events) == 2
         assert events[0].seq == 0
         assert events[1].seq == 1
