@@ -94,15 +94,9 @@ def _make_provider_factory(
             )
 
         # Default: Ollama (local models)
-        try:
-            from labos.providers.ollama import OllamaProvider
+        from agentos.lm.providers.ollama import OllamaProvider
 
-            return OllamaProvider(model=model_name, base_url=settings.ollama_base_url)
-        except ImportError:
-            raise RuntimeError(
-                f"No provider available for model '{model_name}'. "
-                "Install labos for Ollama support, or configure an API key."
-            )
+        return OllamaProvider(model=model_name, base_url=settings.ollama_base_url)
 
     return factory
 
