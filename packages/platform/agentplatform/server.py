@@ -6,10 +6,12 @@ import json
 import logging
 import urllib.request
 from dataclasses import asdict
+from datetime import UTC, datetime
 from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 
 from agentos.lm import model_registry
 from agentos.lm.provider import BaseLMProvider, ModelCapabilities
@@ -24,6 +26,8 @@ from agentplatform.api_schemas import (
     DomainPackDetailResponse,
     DomainPackSummaryResponse,
     EventResponse,
+    FileEntry,
+    FileListResponse,
     GenerateWorkflowRequest,
     GenerateWorkflowResponse,
     IntegrationStatusResponse,
@@ -593,6 +597,111 @@ def create_app(
             }
             for e in events
         ]
+
+    # ── File Access Endpoints ────────────────────────────────────────
+
+    _HIDDEN_FILES = {"events.db", "__pycache__", ".DS_Store"}
+    _TEXT_EXTENSIONS = {
+        ".md", ".txt", ".py", ".json", ".csv", ".yaml", ".yml",
+        ".html", ".css", ".js", ".ts", ".log", ".toml", ".cfg", ".ini",
+    }
+    _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
+    _IMAGE_MIMETYPES = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp",
+    }
+
+    def _classify_file(ext: str) -> str:
+        ext = ext.lower()
+        if ext in {".md", ".txt", ".log"}:
+            return "text"
+        if ext in {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}:
+            return "image"
+        if ext in {".py", ".js", ".ts", ".css", ".html", ".json", ".yaml", ".yml", ".toml"}:
+            return "code"
+        if ext in {".csv", ".tsv", ".parquet", ".xlsx"}:
+            return "data"
+        return "binary"
+
+    @app.get("/api/sessions/{session_id}/files", response_model=FileListResponse)
+    def list_session_files(session_id: str) -> dict[str, Any]:
+        """List all files in a session's workspace."""
+        from pathlib import Path as _Path
+
+        try:
+            root_str = orchestrator.get_session_workspace_root(session_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail=f"Session '{session_id}' not found"
+            )
+
+        root = _Path(root_str)
+        if not root.exists():
+            return {"files": []}
+
+        entries = []
+        for p in sorted(root.rglob("*")):
+            if not p.is_file():
+                continue
+            # Skip hidden files and internal files
+            if any(part.startswith(".") or part in _HIDDEN_FILES for part in p.parts):
+                continue
+            rel = p.relative_to(root)
+            stat = p.stat()
+            entries.append({
+                "path": str(rel),
+                "name": p.name,
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
+                "type": _classify_file(p.suffix),
+            })
+
+        return {"files": entries}
+
+    @app.get("/api/sessions/{session_id}/files/{file_path:path}")
+    def get_session_file(session_id: str, file_path: str) -> Any:
+        """Download or view a file from a session's workspace."""
+        from pathlib import Path as _Path
+
+        try:
+            root_str = orchestrator.get_session_workspace_root(session_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail=f"Session '{session_id}' not found"
+            )
+
+        root = _Path(root_str).resolve()
+        resolved = (root / file_path).resolve()
+
+        # Path traversal protection
+        if not str(resolved).startswith(str(root)):
+            raise HTTPException(
+                status_code=400, detail="Invalid file path"
+            )
+
+        if not resolved.exists() or not resolved.is_file():
+            raise HTTPException(
+                status_code=404, detail=f"File '{file_path}' not found"
+            )
+
+        ext = resolved.suffix.lower()
+
+        # Text files
+        if ext in _TEXT_EXTENSIONS:
+            content = resolved.read_text(encoding="utf-8", errors="replace")
+            return Response(content=content, media_type="text/plain; charset=utf-8")
+
+        # Image files
+        if ext in _IMAGE_EXTENSIONS:
+            mime = _IMAGE_MIMETYPES.get(ext, "application/octet-stream")
+            return FileResponse(str(resolved), media_type=mime)
+
+        # Other files — download
+        return FileResponse(
+            str(resolved),
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{resolved.name}"'},
+        )
 
     # ── Integration Endpoints ─────────────────────────────────────────
 

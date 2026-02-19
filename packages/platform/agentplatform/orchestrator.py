@@ -214,6 +214,11 @@ class SessionOrchestrator:
             "error": record.error,
         }
 
+    def get_session_workspace_root(self, session_id: str) -> str:
+        """Return the workspace root directory for a session."""
+        record = self._get_record(session_id)
+        return record.config.workspace_root
+
     def create_session_from_workflow(
         self,
         workflow: "WorkflowDefinition",

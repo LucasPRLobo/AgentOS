@@ -236,3 +236,22 @@ class GenerateWorkflowResponse(BaseModel):
 
     workflow: dict
     explanation: str = ""
+
+
+# ── File Access ──────────────────────────────────────────────────
+
+
+class FileEntry(BaseModel):
+    """Metadata for a single file in a session workspace."""
+
+    path: str
+    name: str
+    size: int
+    modified: str
+    type: str = "binary"
+
+
+class FileListResponse(BaseModel):
+    """Response for GET /api/sessions/:id/files."""
+
+    files: list[FileEntry] = Field(default_factory=list)
