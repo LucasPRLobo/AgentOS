@@ -22,7 +22,13 @@ from agentos.runtime.role_template import RoleTemplate
 from agentos.runtime.task import TaskNode
 from agentos.runtime.workspace import Workspace, WorkspaceConfig
 from agentos.schemas.budget import BudgetSpec
-from agentos.schemas.events import BaseEvent, EventType, SessionFinished, SessionStarted
+from agentos.schemas.events import (
+    BaseEvent,
+    EventType,
+    SessionFinished,
+    SessionStarted,
+    WorkspaceSnapshot,
+)
 from agentos.schemas.session import AgentSlotConfig, SessionConfig
 from agentos.tools.registry import ToolRegistry
 
@@ -392,9 +398,19 @@ class SessionOrchestrator:
 
         # Create workspace manifest for file tracking
         manifest = WorkspaceManifest()
+        manifest.scan_workspace(Path(config.workspace_root))
 
         if lm_provider_factory is None:
             raise RuntimeError("No LM provider factory configured")
+
+        # Emit pre-run workspace snapshot
+        event_log.append(
+            WorkspaceSnapshot(
+                run_id=run_id,
+                seq=1,
+                payload={"phase": "pre_run", **manifest.snapshot()},
+            )
+        )
 
         dag = compile_workflow(
             workflow,
@@ -420,6 +436,17 @@ class SessionOrchestrator:
             record.error = str(exc)
             record.state = SessionState.FAILED
             self._emit_session_finished(record, "FAILED")
+        finally:
+            # Emit post-run workspace snapshot
+            events = event_log.replay(run_id)
+            next_seq = max((e.seq for e in events), default=1) + 1
+            event_log.append(
+                WorkspaceSnapshot(
+                    run_id=run_id,
+                    seq=next_seq,
+                    payload={"phase": "post_run", **manifest.snapshot()},
+                )
+            )
 
     def _resolve_workspace(self, workflow_id: str) -> str:
         """Build a workspace directory path for a workflow session."""

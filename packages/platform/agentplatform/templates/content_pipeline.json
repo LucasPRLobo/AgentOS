@@ -20,7 +20,18 @@
         "tools": ["file_write", "web_search"],
         "budget": {"max_tokens": 10000, "max_tool_calls": 8, "max_time_seconds": 60.0, "max_recursion_depth": 1},
         "max_steps": 10,
-        "advanced": null
+        "advanced": null,
+        "task": {
+          "objective": "Create a detailed content outline with sections, key points, and target word counts",
+          "deliverables": ["outline.md saved to workspace"],
+          "acceptance_criteria": [
+            "Outline has at least 5 sections",
+            "Each section has 2+ key points",
+            "Target word count is specified per section"
+          ],
+          "inputs": {},
+          "context_files": []
+        }
       }
     },
     {
@@ -35,7 +46,18 @@
         "tools": ["file_read", "file_write"],
         "budget": {"max_tokens": 30000, "max_tool_calls": 10, "max_time_seconds": 180.0, "max_recursion_depth": 1},
         "max_steps": 15,
-        "advanced": null
+        "advanced": null,
+        "task": {
+          "objective": "Write a complete first draft following the outline structure",
+          "deliverables": ["draft.md saved to workspace"],
+          "acceptance_criteria": [
+            "Draft covers all sections from the outline",
+            "Each section meets the target word count",
+            "Includes introduction and conclusion"
+          ],
+          "inputs": {},
+          "context_files": ["outline.md"]
+        }
       }
     },
     {
@@ -50,7 +72,19 @@
         "tools": ["file_read", "file_write"],
         "budget": {"max_tokens": 20000, "max_tool_calls": 10, "max_time_seconds": 120.0, "max_recursion_depth": 1},
         "max_steps": 15,
-        "advanced": null
+        "advanced": null,
+        "task": {
+          "objective": "Edit and polish the draft into publication-ready content",
+          "deliverables": ["final.md saved to workspace"],
+          "acceptance_criteria": [
+            "All grammar and spelling errors corrected",
+            "Consistent tone and style throughout",
+            "Smooth transitions between sections",
+            "Final version saved as final.md"
+          ],
+          "inputs": {},
+          "context_files": ["draft.md"]
+        }
       }
     }
   ],

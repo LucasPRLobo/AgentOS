@@ -201,6 +201,28 @@ def compile_workflow(
             "Other agents downstream depend on your output."
         )
 
+        # Append structured TaskDefinition sections if present
+        task = getattr(wf_node.config, "task", None)
+        if task is not None:
+            task_parts: list[str] = []
+            if task.objective:
+                task_parts.append(f"## Your Task\n**Objective:** {task.objective}")
+            if task.deliverables:
+                dl = "\n".join(f"- {d}" for d in task.deliverables)
+                task_parts.append(f"**Deliverables:**\n{dl}")
+            if task.acceptance_criteria:
+                ac = "\n".join(f"- {c}" for c in task.acceptance_criteria)
+                task_parts.append(
+                    f"**Acceptance Criteria (verify ALL before finishing):**\n{ac}\n\n"
+                    "Before calling finish, verify your output meets ALL criteria above. "
+                    "If not, continue working until they are met."
+                )
+            if task.inputs:
+                inp = "\n".join(f"- {k}: {v}" for k, v in task.inputs.items())
+                task_parts.append(f"**Inputs:**\n{inp}")
+            if task_parts:
+                static_desc += "\n\n" + "\n\n".join(task_parts)
+
         # Collect output schemas from outgoing edges for this node
         node_output_schemas: list[dict] = []
         for edge in workflow.edges:

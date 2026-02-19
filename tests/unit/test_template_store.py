@@ -142,3 +142,19 @@ class TestBuiltinTemplates:
         assert wf.name == "Research Report"
         assert len(wf.nodes) == 4
         assert len(wf.edges) == 3
+
+    def test_content_pipeline_has_task_definitions(self) -> None:
+        store = TemplateStore()
+        wf = store.get("tpl_content_pipeline")
+        for node in wf.nodes:
+            assert node.config.task is not None, f"Node '{node.display_name}' missing TaskDefinition"
+            assert node.config.task.objective != ""
+
+    def test_content_pipeline_task_validates(self) -> None:
+        store = TemplateStore()
+        wf = store.get("tpl_content_pipeline")
+        outliner = next(n for n in wf.nodes if n.id == "outliner")
+        assert "outline" in outliner.config.task.objective.lower()
+        assert len(outliner.config.task.acceptance_criteria) >= 1
+        drafter = next(n for n in wf.nodes if n.id == "drafter")
+        assert "outline.md" in drafter.config.task.context_files
