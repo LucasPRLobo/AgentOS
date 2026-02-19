@@ -32,9 +32,11 @@ from agentplatform.api_schemas import (
     GenerateWorkflowResponse,
     IntegrationStatusResponse,
     ModelCapabilitiesResponse,
+    ModelCostBreakdown,
     ModelListEntry,
     RunWorkflowRequest,
     RunWorkflowResponse,
+    SessionCostResponse,
     SessionDetailResponse,
     SessionSummaryResponse,
     SettingsResponse,
@@ -702,6 +704,18 @@ def create_app(
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{resolved.name}"'},
         )
+
+    # ── Cost Endpoint ────────────────────────────────────────────────
+
+    @app.get("/api/sessions/{session_id}/cost", response_model=SessionCostResponse)
+    def get_session_cost(session_id: str) -> dict[str, Any]:
+        """Calculate and return the cost breakdown for a session."""
+        try:
+            return orchestrator.compute_session_cost(session_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail=f"Session '{session_id}' not found"
+            )
 
     # ── Integration Endpoints ─────────────────────────────────────────
 

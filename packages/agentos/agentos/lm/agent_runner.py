@@ -177,6 +177,9 @@ class AgentRunner:
                             "call_type": "agent_step",
                             "tokens_used": response.tokens_used,
                             "duration_seconds": lm_duration,
+                            "model": self._lm_provider.get_model_name(),
+                            "prompt_tokens": response.prompt_tokens,
+                            "completion_tokens": response.completion_tokens,
                         },
                     )
                 )

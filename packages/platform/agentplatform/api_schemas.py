@@ -255,3 +255,26 @@ class FileListResponse(BaseModel):
     """Response for GET /api/sessions/:id/files."""
 
     files: list[FileEntry] = Field(default_factory=list)
+
+
+# ── Cost ─────────────────────────────────────────────────────────
+
+
+class ModelCostBreakdown(BaseModel):
+    """Cost breakdown for a single model."""
+
+    model: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+class SessionCostResponse(BaseModel):
+    """Response for GET /api/sessions/:id/cost."""
+
+    total_cost_usd: float = 0.0
+    total_tokens: int = 0
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    by_model: list[ModelCostBreakdown] = Field(default_factory=list)

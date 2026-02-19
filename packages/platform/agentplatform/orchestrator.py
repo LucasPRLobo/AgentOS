@@ -219,6 +219,64 @@ class SessionOrchestrator:
         record = self._get_record(session_id)
         return record.config.workspace_root
 
+    def compute_session_cost(self, session_id: str) -> dict[str, Any]:
+        """Calculate actual cost from LMCallFinished events and model pricing.
+
+        Returns a dict matching the SessionCostResponse schema.
+        """
+        from agentos.lm import model_registry
+
+        record = self._get_record(session_id)
+        all_events = record.event_log.query_all()
+
+        # Accumulate per-model
+        model_data: dict[str, dict[str, int]] = {}  # model → {prompt, completion}
+
+        for e in all_events:
+            if e.event_type.value != "LMCallFinished":
+                continue
+            p = e.payload
+            model_name = p.get("model", "unknown")
+            prompt_tok = p.get("prompt_tokens", 0)
+            completion_tok = p.get("completion_tokens", 0)
+
+            if model_name not in model_data:
+                model_data[model_name] = {"prompt_tokens": 0, "completion_tokens": 0}
+            model_data[model_name]["prompt_tokens"] += prompt_tok
+            model_data[model_name]["completion_tokens"] += completion_tok
+
+        by_model = []
+        total_cost = 0.0
+        total_tokens = 0
+        total_prompt = 0
+        total_completion = 0
+
+        for model_name, counts in model_data.items():
+            caps = model_registry.get_capabilities(model_name)
+            pt = counts["prompt_tokens"]
+            ct = counts["completion_tokens"]
+            cost = (pt / 1000 * caps.cost_per_1k_input) + (ct / 1000 * caps.cost_per_1k_output)
+
+            by_model.append({
+                "model": model_name,
+                "prompt_tokens": pt,
+                "completion_tokens": ct,
+                "total_tokens": pt + ct,
+                "cost_usd": round(cost, 6),
+            })
+            total_cost += cost
+            total_prompt += pt
+            total_completion += ct
+            total_tokens += pt + ct
+
+        return {
+            "total_cost_usd": round(total_cost, 6),
+            "total_tokens": total_tokens,
+            "total_prompt_tokens": total_prompt,
+            "total_completion_tokens": total_completion,
+            "by_model": by_model,
+        }
+
     def create_session_from_workflow(
         self,
         workflow: "WorkflowDefinition",
