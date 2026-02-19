@@ -39,6 +39,48 @@ _PERSONA_PROMPTS: dict[str, str] = {
 }
 
 
+def _validate_output_contract(
+    result: str | None, output_schema: dict | None
+) -> tuple[bool, str]:
+    """Validate agent output against a JSON Schema contract.
+
+    Returns (is_valid, error_message).
+    Skips if output_schema is None or result is not JSON.
+    """
+    if output_schema is None or result is None:
+        return True, ""
+
+    # Try to parse result as JSON
+    import json as _json
+
+    try:
+        data = _json.loads(result)
+    except (ValueError, TypeError):
+        # Not JSON — skip validation (most agent outputs are plain text)
+        return True, ""
+
+    # Try jsonschema first, fall back to basic structural check
+    try:
+        import jsonschema
+        jsonschema.validate(instance=data, schema=output_schema)
+        return True, ""
+    except ImportError:
+        # Basic fallback: check type and required keys
+        expected_type = output_schema.get("type")
+        if expected_type == "object" and not isinstance(data, dict):
+            return False, f"Expected JSON object, got {type(data).__name__}"
+        if expected_type == "array" and not isinstance(data, list):
+            return False, f"Expected JSON array, got {type(data).__name__}"
+        if expected_type == "object" and isinstance(data, dict):
+            required = output_schema.get("required", [])
+            missing = [k for k in required if k not in data]
+            if missing:
+                return False, f"Missing required keys: {missing}"
+        return True, ""
+    except jsonschema.ValidationError as e:
+        return False, str(e.message)
+
+
 def compile_workflow(
     workflow: WorkflowDefinition,
     *,
@@ -137,12 +179,21 @@ def compile_workflow(
             "Other agents downstream depend on your output."
         )
 
+        # Collect output schemas from outgoing edges for this node
+        node_output_schemas: list[dict] = []
+        for edge in workflow.edges:
+            if edge.source == wf_node.id:
+                dc = edge.data_contract
+                if dc and dc.output_schema:
+                    node_output_schemas.append(dc.output_schema)
+
         # Capture in closure — dep_tasks gives runtime access to predecessor results
         _runner = runner
         _config = agent_config
         _static_desc = static_desc
         _dep_tasks = list(dep_tasks)  # snapshot
         _dep_names = {id(node_map[did]): node_names[did] for did in deps[wf_node.id] if did in node_map}
+        _output_schemas = list(node_output_schemas)
 
         def make_callable(
             r: AgentRunner = _runner,
@@ -150,6 +201,7 @@ def compile_workflow(
             sd: str = _static_desc,
             dt: list[TaskNode] = _dep_tasks,
             dn: dict[int, str] = _dep_names,
+            schemas: list[dict] = _output_schemas,
         ) -> Callable[[], Any]:
             def run_agent() -> str | None:
                 # Build full task description at runtime, including predecessor outputs
@@ -169,8 +221,40 @@ def compile_workflow(
                                 f"=== End of '{dep_name}' output ==="
                             )
                 full_desc = "\n\n".join(parts)
-                agent_run_id = generate_run_id()
-                _, result = r.run(full_desc, run_id=agent_run_id, config=c)
+
+                max_retries = 2
+                for attempt in range(max_retries + 1):
+                    agent_run_id = generate_run_id()
+                    task_desc = full_desc
+                    if attempt > 0:
+                        # Add feedback about schema violation
+                        task_desc += f"\n\n{_contract_feedback}"
+                    _, result = r.run(task_desc, run_id=agent_run_id, config=c)
+
+                    # Validate against output schemas
+                    if schemas:
+                        all_valid = True
+                        _contract_feedback_parts = []
+                        for schema in schemas:
+                            valid, err = _validate_output_contract(result, schema)
+                            if not valid:
+                                all_valid = False
+                                _contract_feedback_parts.append(
+                                    f"[CONTRACT VIOLATION] Your output did not match "
+                                    f"the required schema: {err}\n"
+                                    f"Expected schema: {schema}\n"
+                                    f"Please fix your output to match the contract."
+                                )
+                        if not all_valid and attempt < max_retries:
+                            _contract_feedback = "\n\n".join(_contract_feedback_parts)
+                            logger.warning(
+                                "Contract validation failed for node (attempt %d/%d): %s",
+                                attempt + 1, max_retries + 1,
+                                _contract_feedback_parts,
+                            )
+                            continue
+                    # If valid or no schemas or out of retries, return result
+                    return result
                 return result
             return run_agent
 
