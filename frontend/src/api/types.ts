@@ -112,6 +112,14 @@ export interface AdvancedModelConfig {
   few_shot_examples?: { input: string; output: string }[];
 }
 
+export interface TaskDefinition {
+  objective: string;
+  deliverables: string[];
+  acceptance_criteria: string[];
+  inputs: Record<string, string>;
+  context_files: string[];
+}
+
 export interface WorkflowNodeConfig {
   model: string;
   system_prompt: string;
@@ -120,6 +128,7 @@ export interface WorkflowNodeConfig {
   budget: BudgetSpec | null;
   max_steps: number;
   advanced: AdvancedModelConfig | null;
+  task?: TaskDefinition | null;
 }
 
 export interface WorkflowNode {

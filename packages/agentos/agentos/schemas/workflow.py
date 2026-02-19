@@ -19,6 +19,16 @@ class AdvancedModelConfig(BaseModel):
     few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
 
 
+class TaskDefinition(BaseModel):
+    """Structured task assigned to an agent node."""
+
+    objective: str = ""
+    deliverables: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    inputs: dict[str, str] = Field(default_factory=dict)
+    context_files: list[str] = Field(default_factory=list)
+
+
 class WorkflowNodeConfig(BaseModel):
     """Configuration for a single agent node in a workflow."""
 
@@ -32,6 +42,7 @@ class WorkflowNodeConfig(BaseModel):
     budget: BudgetSpec | None = None
     max_steps: int = Field(default=50, gt=0)
     advanced: AdvancedModelConfig | None = None
+    task: TaskDefinition | None = None
 
 
 class WorkflowNode(BaseModel):
