@@ -118,6 +118,11 @@ line-length = 100
 
 ## Week 0: Pre-Development Spikes (Days 1–5)
 
+> **Status: COMPLETE (2026-03-02).** All three spikes answered. Full findings in `docs/WEEK0_SPIKE_FINDINGS.md`.
+> - Spike 1: 10/10 — PROCEED with Tier 2 Claude Code adapter
+> - Spike 2: TaskOutput schema locked — 16 tests passing
+> - Spike 3: Event schema + SeqCounter locked — 21 tests passing
+
 Three spikes must be completed before committing to the 6-month plan. These are questions to answer, not features to build.
 
 ### Spike 1: Claude Code CLI Integration Surface
@@ -128,6 +133,7 @@ Three spikes must be completed before committing to the 6-month plan. These are 
 
 ```python
 """spike_claude_code.py — Week 0 integration surface test."""
+import os
 import subprocess
 import json
 import time
@@ -142,14 +148,17 @@ def run_claude_code_test(run_id: int) -> dict:
     workspace.mkdir(parents=True, exist_ok=True)
 
     start = time.monotonic()
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)  # Strip anti-nesting guard
     result = subprocess.run(
         ["claude", "--print", "--output-format", "json",
          "--allowedTools", "Write,Read",
-         TASK],
+         "-p", TASK],  # Must use -p flag, not positional arg
         cwd=str(workspace),
         capture_output=True,
         text=True,
         timeout=120,
+        env=env,
     )
     elapsed = time.monotonic() - start
 
@@ -173,22 +182,27 @@ if __name__ == "__main__":
 
 **Questions to answer:**
 
-| Question | How to test |
-|----------|-------------|
-| Headless launch? | `claude --print` flag, no TTY |
-| Task input without prompt? | Pass task as positional arg |
-| Capture structured output? | `--output-format json` flag |
-| Monitor token consumption? | Parse JSON output for usage metrics |
-| Programmatic termination? | `subprocess.terminate()` + check file integrity |
-| Consistent across 10 runs? | Compare results array |
-| Rate limits / restrictions? | Note any 429s or auth failures |
+| Question | How to test | Result (2026-03-02) |
+|----------|-------------|---------------------|
+| Headless launch? | `claude --print` flag, no TTY | Yes — works reliably |
+| Task input method? | `-p` flag (not positional) | Yes — positional args fail, must use `-p` |
+| Capture structured output? | `--output-format json` flag | Yes — all 10 runs parsed |
+| Monitor token consumption? | Parse JSON output for usage metrics | Yes — JSON includes usage data |
+| Programmatic termination? | `subprocess.terminate()` + check file integrity | Yes — clean SIGTERM (code -15) |
+| Consistent across 10 runs? | Compare results array | Yes — 10/10, 5.9–9.8s range |
+| Rate limits / restrictions? | Note any 429s or auth failures | None observed |
+| Anti-nesting guard? | (discovered during testing) | Must unset `CLAUDECODE` env var |
 
 **Decision gate:**
 - **8+/10 succeed** → Proceed with Tier 2 Claude Code adapter (Phase 2, weeks 9-10)
 - **6-7/10** → Proceed cautiously; allocate extra time in weeks 9-10 for reliability work
 - **<6/10** → Activate contingency: Tier 1 API fallback for demo, investigate Codex for Tier 2
 
+> **Result: 10/10 — PROCEED.** See `docs/WEEK0_SPIKE_FINDINGS.md` for full data.
+
 ### Spike 2: Task Output Schema v0.1
+
+> **Status: LOCKED.** Implemented in `agentos/schemas/task.py`, validated by 16 unit tests covering research, implementation, and failed task scenarios.
 
 **Goal:** Produce a concrete Pydantic schema that every component codes against.
 
@@ -261,6 +275,8 @@ class TaskMetrics(BaseModel):
 **Validation:** Create a test that generates a `TaskOutput`, serializes to JSON, deserializes, and asserts round-trip fidelity. Write 3 example outputs covering: a research task, a code implementation task, and a failed task.
 
 ### Spike 3: Event Schema Design
+
+> **Status: LOCKED.** Event schema in `agentos/schemas/events.py`, SeqCounter in `agentos/kernel/seq.py`. Validated by 14 event tests + 7 SeqCounter tests (including thread safety with 5000 concurrent increments).
 
 **Goal:** Design the event envelope and all V1 event types as Pydantic models, plus the SQLite DDL.
 
@@ -380,6 +396,8 @@ CREATE INDEX idx_events_timestamp ON events(timestamp);
 | `error.occurred` | `source`, `error_type`, `message`, `recoverable` | `{"source": "agent.a1", "error_type": "timeout", "recoverable": true}` |
 
 **Week 0 exit gate:** Review the event schema and task output schema together. Confirm that `task.output_produced` references the task output schema consistently. Confirm no gaps that would force a redesign.
+
+> **Exit gate passed (2026-03-02).** `task.output_produced` payload contains `output_path` pointing to the TaskOutput manifest. `TaskOutput.files_produced` lists all workspace-relative paths. The schemas are consistent — no redesign needed.
 
 ---
 
