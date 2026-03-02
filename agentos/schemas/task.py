@@ -8,6 +8,18 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 
+class TaskConfig(BaseModel):
+    """A single task (node) in the workflow DAG."""
+
+    name: str
+    agent: str | None = None
+    type: str = "agent_task"  # agent_task | approval_gate | input_gate
+    description: str = ""
+    depends_on: list[str] = Field(default_factory=list)
+    workspace: str = "shared"
+    prompt: str = ""  # Gate prompt for approval/input gates
+
+
 class TaskStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
