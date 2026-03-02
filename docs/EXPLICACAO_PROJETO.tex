@@ -1,0 +1,262 @@
+\documentclass[12pt, a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazilian]{babel}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric}
+
+\geometry{margin=2.5cm}
+
+\definecolor{primary}{HTML}{2563EB}
+\definecolor{accent}{HTML}{059669}
+\definecolor{muted}{HTML}{6B7280}
+\definecolor{danger}{HTML}{DC2626}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=primary,
+    urlcolor=primary
+}
+
+\titleformat{\section}{\Large\bfseries\color{primary}}{}{0em}{}
+\titleformat{\subsection}{\large\bfseries}{}{0em}{}
+
+\title{\Huge\bfseries AgentOS\\[0.3em]\Large\color{muted} O que é esse projeto?}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+% ─────────────────────────────────────────────
+\section{O que são agentes de IA?}
+
+Antes de falar do AgentOS, vale entender o que são \textbf{agentes de IA} --- porque são diferentes do ChatGPT que a maioria das pessoas conhece.
+
+Um chatbot como o ChatGPT é uma conversa: você pergunta, ele responde. Ele não faz nada no seu computador. Já um \textbf{agente de IA} é um programa que pode \textbf{agir} --- ele lê arquivos, escreve documentos, navega na internet, executa comandos e toma decisões sozinho para cumprir uma tarefa. É a diferença entre perguntar ``como eu faço um bolo?'' e ter alguém que vai na cozinha e faz o bolo pra você.
+
+Alguns exemplos reais que já existem hoje:
+
+\begin{itemize}[leftmargin=1.5em]
+    \item \textbf{Claude Code} (da Anthropic) --- um agente que lê o código de um projeto, entende a estrutura, escreve código novo, roda testes e corrige erros. Um programador pede ``adicione login nesse sistema'' e o agente faz tudo sozinho.
+
+    \item \textbf{Codex} (da OpenAI) --- similar ao Claude Code. Recebe tarefas de programação e executa de forma autônoma.
+
+    \item \textbf{Devin} --- um agente que tenta replicar o trabalho completo de um desenvolvedor, do planejamento à implementação.
+\end{itemize}
+
+Esses agentes já são impressionantes sozinhos. Mas eles criam dois problemas sérios.
+
+% ─────────────────────────────────────────────
+\section{Problema 1: Agentes trabalham isolados}
+
+Esses agentes trabalham \textbf{sozinhos}. Cada um opera de forma isolada, sem saber que outros existem.
+
+Se você quer dois agentes fazendo coisas diferentes no mesmo projeto --- por exemplo, um pesquisando e outro implementando baseado nessa pesquisa --- você precisa abrir dois terminais, copiar informações entre eles manualmente, e torcer pra que um não atrapalhe o outro.
+
+Não existe uma forma de dizer: ``Agente~A, faça a pesquisa. Quando terminar, passe o resultado pro Agente~B implementar. Mas antes, me deixa revisar o que o A produziu.''
+
+É como ter uma empresa onde cada funcionário trabalha numa sala isolada, sem conseguir falar com os outros, e o chefe precisa ir de sala em sala levando papéis de um pro outro.
+
+% ─────────────────────────────────────────────
+\section{Problema 2: Ninguém controla o que os agentes fazem}
+
+Este é o problema maior --- e o que torna o AgentOS diferente de todas as outras ferramentas no mercado.
+
+Hoje, quando uma empresa deixa seus funcionários usarem agentes de IA, ela não tem como responder perguntas básicas:
+
+\begin{itemize}[leftmargin=1.5em]
+    \item \textbf{Quantos agentes estão rodando agora?} Não sei.
+    \item \textbf{O que eles estão acessando?} Não sei.
+    \item \textbf{Quanto estamos gastando com isso?} Preciso checar manualmente em cada conta de API.
+    \item \textbf{Algum agente acessou dados confidenciais?} Impossível saber.
+    \item \textbf{Se um auditor perguntar o que nossos agentes fizeram no último mês, temos como mostrar?} Não.
+\end{itemize}
+
+Isso se chama \textbf{shadow AI} --- agentes de IA operando dentro de uma organização sem controle, sem visibilidade e sem registro. É o equivalente a dar acesso irrestrito ao computador da empresa para dezenas de assistentes que ninguém supervisiona.
+
+Para uma pessoa usando um agente no computador pessoal, isso pode não parecer grave. Mas para empresas --- especialmente em setores regulamentados como finanças, saúde e direito --- é um risco real. Auditores cobram registros. Reguladores exigem conformidade. Um agente que acessa dados errados ou toma uma decisão não supervisionada pode gerar consequências sérias.
+
+\textbf{Nenhuma ferramenta no mercado resolve esse problema.} As alternativas existentes (CrewAI, AutoGen, LangGraph) focam em fazer agentes conversarem entre si. Nenhuma se preocupa com governança: controle de acesso, trilha de auditoria, limites de orçamento, aprovações obrigatórias, segurança.
+
+% ─────────────────────────────────────────────
+\section{A Solução}
+
+O AgentOS é uma \textbf{plataforma de governança e orquestração de agentes de IA}. Pense nele como a combinação de um gerente de projeto com um departamento de compliance --- automatizado:
+
+\begin{itemize}[leftmargin=1.5em]
+    \item \textbf{Coordena múltiplos agentes} trabalhando juntos em um fluxo de trabalho definido
+    \item \textbf{Controla a ordem de execução} --- quem faz o quê, e em que sequência
+    \item \textbf{Permite revisão humana} --- pontos de aprovação onde você revisa o trabalho antes de continuar
+    \item \textbf{Controla custos com limites rígidos} --- define orçamentos e o sistema para automaticamente se o limite for atingido. Sem surpresas na fatura
+    \item \textbf{Registra absolutamente tudo} --- cada ação, cada arquivo acessado, cada decisão fica salva em um registro imutável que serve como trilha de auditoria
+    \item \textbf{Controla permissões} --- cada agente só pode acessar o que foi explicitamente permitido. Um agente de pesquisa não acessa o banco de dados financeiro. Um agente de código não acessa dados de clientes
+    \item \textbf{Funciona com qualquer agente} --- não é preso a um fornecedor. Coordena Claude Code, Codex, ou qualquer outro agente de IA
+\end{itemize}
+
+A diferença fundamental: outras ferramentas fazem agentes trabalharem juntos. O AgentOS faz agentes trabalharem juntos \textbf{de forma segura, controlada e auditável}.
+
+% ─────────────────────────────────────────────
+\section{Como Funciona --- Exemplo Prático}
+
+Imagine que você gerencia investimentos e quer analisar se vale a pena investir em uma empresa. Hoje, você pediria pra diferentes pessoas da sua equipe fazerem partes dessa análise. Com o AgentOS, agentes de IA fazem esse trabalho --- e você continua no controle.
+
+\vspace{1em}
+\begin{center}
+\begin{tikzpicture}[
+    node distance=0.8cm,
+    agent/.style={rectangle, rounded corners=6pt, draw=primary, fill=primary!8, text width=3cm, align=center, minimum height=1cm, font=\small\bfseries},
+    gate/.style={diamond, draw=accent, fill=accent!10, text width=1.6cm, align=center, aspect=2.2, font=\scriptsize\bfseries, inner sep=1pt},
+    arr/.style={-{Stealth[length=6pt]}, thick, color=muted}
+]
+    \node[agent] (a1) {Analista de\\Mercado};
+    \node[gate, right=of a1] (g1) {Sua\\Aprovação};
+    \node[agent, right=of g1] (a2) {Analista\\Financeiro};
+    \node[gate, right=of a2] (g2) {Sua\\Aprovação};
+    \node[agent, right=of g2] (a3) {Relatório\\Final};
+
+    \draw[arr] (a1) -- (g1);
+    \draw[arr] (g1) -- (a2);
+    \draw[arr] (a2) -- (g2);
+    \draw[arr] (g2) -- (a3);
+\end{tikzpicture}
+\end{center}
+\vspace{1em}
+
+\begin{enumerate}[leftmargin=1.5em]
+    \item O \textbf{Analista de Mercado} (um agente de IA) pesquisa notícias, tendências do setor, concorrentes e regulamentações. Produz um resumo estruturado com os pontos principais.
+
+    \item O fluxo \textbf{pausa} e mostra esse resumo pra você. Você lê, e decide:
+    \begin{itemize}
+        \item \textbf{Aprovar} --- ``A pesquisa está boa, pode continuar''
+        \item \textbf{Rejeitar com feedback} --- ``Faltou analisar o mercado asiático'' (o agente recebe essa instrução)
+    \end{itemize}
+
+    \item O \textbf{Analista Financeiro} (outro agente) recebe a pesquisa aprovada e analisa balanços, receitas, margens, dívidas. Produz uma avaliação financeira com indicadores e riscos.
+
+    \item Pausa de novo pra você revisar os números.
+
+    \item O \textbf{Gerador de Relatório} compila tudo em um documento final com recomendação de investimento.
+\end{enumerate}
+
+\textbf{Durante todo esse processo, o AgentOS:}
+\begin{itemize}[leftmargin=1.5em]
+    \item Registrou cada ação de cada agente no log de eventos
+    \item Garantiu que o Analista de Mercado só acessou fontes de notícias (não dados internos)
+    \item Garantiu que o Analista Financeiro só acessou os balanços permitidos
+    \item Controlou quanto cada agente gastou em chamadas de API
+    \item Gerou uma trilha de auditoria completa que mostra exatamente o que aconteceu, quando, e por quê
+\end{itemize}
+
+Se um auditor perguntar ``como essa recomendação de investimento foi gerada?'', você tem a resposta completa.
+
+\subsection{O que muda em relação a fazer manualmente?}
+
+\begin{itemize}[leftmargin=1.5em]
+    \item \textbf{Velocidade} --- Os agentes trabalham em minutos o que levaria horas ou dias de trabalho humano
+    \item \textbf{Consistência} --- O fluxo sempre segue os mesmos passos, nada é esquecido
+    \item \textbf{Controle total} --- Você aprova cada etapa --- nada avança sem sua autorização
+    \item \textbf{Custo previsível} --- Limites de orçamento rígidos, sem surpresas
+    \item \textbf{Auditabilidade} --- Registro completo de tudo que aconteceu --- quem fez o quê, quando, com que dados, e qual foi o resultado
+\end{itemize}
+
+% ─────────────────────────────────────────────
+\section{Conceitos Principais}
+
+\begin{description}[style=nextline, leftmargin=1.5em]
+    \item[\textnormal{\textbf{Fluxo de trabalho (Workflow)}}] Uma sequência de tarefas conectadas. Você define quem faz o quê, em que ordem, e onde precisa de aprovação humana.
+
+    \item[\textnormal{\textbf{Agentes}}] Programas de IA que executam tarefas específicas. O AgentOS coordena agentes de diferentes fornecedores (Anthropic, OpenAI, e outros) através de uma interface única.
+
+    \item[\textnormal{\textbf{Gates (Portões de aprovação)}}] Pontos de controle humano no fluxo. Podem ser aprovações (``Está bom? Sim/Não'') ou pedidos de informação (``Qual empresa analisar?'').
+
+    \item[\textnormal{\textbf{Log de eventos}}] Um registro completo e imutável de tudo que aconteceu. Funciona como uma trilha de auditoria --- nada é perdido, nada é alterado. Serve tanto para monitoramento quanto para conformidade regulatória.
+
+    \item[\textnormal{\textbf{Orçamento}}] Limites configuráveis por agente, por equipe e por fluxo de trabalho. O sistema para automaticamente se o limite for atingido --- sem exceções.
+
+    \item[\textnormal{\textbf{Permissões}}] Cada agente recebe apenas o acesso mínimo necessário para sua tarefa. Um agente de pesquisa pode ler notícias mas não pode acessar o banco de dados interno. Essas restrições são aplicadas pelo sistema, não por instrução ao agente.
+\end{description}
+
+% ─────────────────────────────────────────────
+\section{Por que isso importa?}
+
+Agentes de IA estão se tornando cada vez mais comuns nas empresas. O mercado está se movendo rápido:
+
+\begin{itemize}[leftmargin=1.5em]
+    \item O GitHub adicionou agentes de IA (Claude e Codex) diretamente na plataforma de desenvolvimento
+    \item Empresas como Microsoft, Google e Anthropic estão investindo bilhões em agentes autônomos
+    \item Equipes de engenharia já usam múltiplos agentes no dia a dia
+\end{itemize}
+
+Mas ninguém construiu a \textbf{camada de governança} --- o sistema que garante que esses agentes operem de forma segura, controlada e auditável dentro de uma organização. É como se todo mundo estivesse construindo carros cada vez mais rápidos, mas ninguém tivesse construído as estradas, os semáforos e as leis de trânsito.
+
+O AgentOS é essa infraestrutura. Ele não compete com os agentes --- ele os torna seguros de usar.
+
+% ─────────────────────────────────────────────
+\section{Pra Quem é?}
+
+Na primeira versão, o AgentOS é voltado para \textbf{equipes de engenharia de software} que já usam agentes de código (Claude Code, Codex) e querem coordená-los de forma segura. A interface é via linha de comando e arquivos de configuração.
+
+Mas a arquitetura é genérica --- o mesmo motor que coordena agentes de código pode coordenar agentes de qualquer área:
+
+\begin{itemize}[leftmargin=1.5em]
+    \item \textbf{Finanças} --- Agentes coletam dados de mercado, analisam balanços e geram relatórios de risco --- com aprovação humana entre cada etapa
+    \item \textbf{Pesquisa científica} --- Agentes fazem revisão de literatura, projetam experimentos e analisam resultados
+    \item \textbf{Jurídico} --- Agentes pesquisam jurisprudência, redigem pareceres e verificam conformidade
+    \item \textbf{Marketing} --- Agentes analisam concorrentes, geram estratégias de conteúdo e criam materiais
+\end{itemize}
+
+O que muda entre esses casos é o que cada agente faz. O motor de orquestração, governança, aprovações e auditoria é o mesmo.
+
+% ─────────────────────────────────────────────
+\section{O Modelo de Negócio}
+
+O AgentOS não cobra pelas chamadas de IA dos agentes --- essas são pagas diretamente ao fornecedor (Anthropic, OpenAI, etc.). O AgentOS cobra pela plataforma de governança e orquestração:
+
+\begin{itemize}[leftmargin=1.5em]
+    \item \textbf{Gratuito} para desenvolvedores individuais usando localmente
+    \item \textbf{Plano de equipe} para times que precisam de coordenação e monitoramento
+    \item \textbf{Plano empresarial} para organizações que precisam de conformidade, auditoria, controle de permissões e implantação interna
+\end{itemize}
+
+Isso significa que o custo do AgentOS é previsível e independente do volume de uso dos agentes --- similar a como se paga por ferramentas de monitoramento ou segurança, não por processamento.
+
+% ─────────────────────────────────────────────
+\section{O Diferencial Competitivo}
+
+Existem outras ferramentas de orquestração de agentes (CrewAI, AutoGen, LangGraph). O AgentOS se diferencia em quatro pontos:
+
+\begin{enumerate}[leftmargin=1.5em]
+    \item \textbf{Governança como fundação, não como funcionalidade adicional.} O AgentOS foi projetado desde o início para registrar tudo, controlar permissões e garantir auditabilidade. Outras ferramentas adicionam isso depois --- e de forma incompleta.
+
+    \item \textbf{Funciona com agentes reais e autônomos.} Outras ferramentas coordenam cadeias de prompts simples. O AgentOS coordena agentes que operam de verdade --- Claude Code, Codex --- que escrevem código, acessam arquivos e executam comandos.
+
+    \item \textbf{Não depende de um fornecedor.} O AgentOS coordena agentes de qualquer fornecedor. Uma empresa que usa Claude e Codex juntos não pode depender de uma solução da Anthropic ou da OpenAI --- precisa de uma plataforma neutra.
+
+    \item \textbf{Pacotes de conformidade por setor.} No futuro, o AgentOS oferecerá configurações pré-montadas para setores regulamentados (finanças, saúde, jurídico) --- com regras de auditoria, controle de dados e relatórios prontos para inspeção.
+\end{enumerate}
+
+% ─────────────────────────────────────────────
+\section{Estado Atual}
+
+O projeto está em início de desenvolvimento da versão~1. O foco dos primeiros meses é:
+
+\begin{enumerate}[leftmargin=1.5em]
+    \item Construir o motor principal --- log de eventos, executor de fluxos de trabalho, controle de orçamento
+    \item Integrar com o Claude Code como primeiro agente suportado
+    \item Implementar portões de aprovação e revisão humana
+    \item Demonstrar o primeiro fluxo completo: dois agentes colaborando com aprovação humana entre eles
+\end{enumerate}
+
+A meta é ter uma versão funcional em 6 meses, focada em equipes de engenharia de software como primeiro mercado.
+
+\end{document}
