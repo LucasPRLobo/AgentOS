@@ -1,0 +1,54 @@
+# Research → Gate → Implement
+name: research_and_implement
+version: "1.0"
+
+budget:
+  max_tokens: 50000
+  max_cost_usd: 2.00
+  max_time_seconds: 600
+
+agents:
+  researcher:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: >
+      You are a research analyst. Investigate the given topic thoroughly.
+      Produce a structured manifest.json with your findings.
+    tools: [web_search, file_read, file_write]
+    budget:
+      max_tokens: 25000
+      max_cost_usd: 1.00
+
+  implementer:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: >
+      You are a software engineer. Based on the research provided,
+      implement the solution. Write clean, tested code.
+    tools: [file_read, file_write, shell_exec]
+    budget:
+      max_tokens: 25000
+      max_cost_usd: 1.00
+
+tasks:
+  research:
+    name: research
+    agent: researcher
+    description: >
+      Research the requirements for a Python CLI tool that converts
+      CSV files to JSON. Identify edge cases and best practices.
+    workspace: shared
+
+  review_gate:
+    name: review_gate
+    type: approval_gate
+    depends_on: [research]
+    prompt: "Review the research findings before implementation begins."
+
+  implement:
+    name: implement
+    agent: implementer
+    description: >
+      Implement the CSV-to-JSON converter based on the approved research.
+    depends_on: [review_gate]
+    workspace: shared
