@@ -7,6 +7,7 @@ from enum import IntEnum
 from pydantic import BaseModel, Field
 
 from agentos.schemas.budget import BudgetSpec
+from agentos.schemas.capability import CapabilityGrant
 
 
 class AdapterTier(IntEnum):
@@ -23,3 +24,7 @@ class AgentConfig(BaseModel):
     role: str = Field(default="", description="System prompt / role description")
     tools: list[str] = Field(default_factory=list, description="Tool allowlist")
     budget: BudgetSpec = Field(default_factory=BudgetSpec)
+    capabilities: list[CapabilityGrant] = Field(
+        default_factory=list,
+        description="Fine-grained capability grants for this agent",
+    )
