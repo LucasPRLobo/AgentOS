@@ -1,0 +1,118 @@
+# DevOps pipeline: analyze → scan + lint (parallel) → gate → deploy + notify (parallel)
+name: devops_pipeline
+version: "1.0"
+
+budget:
+  max_tokens: 150000
+  max_api_calls: 100
+  max_time_seconds: 1200
+  max_cost_usd: 6.00
+  max_concurrent_tasks: 3
+
+agents:
+  code_analyzer:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Analyze the codebase for changes, dependencies, and impact."
+    tools: [file_read, shell_exec]
+    budget:
+      max_tokens: 20000
+      max_cost_usd: 0.80
+
+  security_scanner:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Scan code for security vulnerabilities and OWASP issues."
+    tools: [file_read, web_search]
+    budget:
+      max_tokens: 25000
+      max_cost_usd: 1.00
+    capabilities:
+      - type: "tool:file_read"
+      - type: "tool:web_search"
+      - type: "path:src/**"
+      - type: "domain:cve.mitre.org"
+      - type: "domain:nvd.nist.gov"
+
+  lint_checker:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Check code quality, style, and best practices compliance."
+    tools: [file_read, shell_exec]
+    budget:
+      max_tokens: 20000
+      max_cost_usd: 0.80
+    capabilities:
+      - type: "tool:file_read"
+      - type: "tool:shell_exec"
+      - type: "path:src/**"
+
+  deployer:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Deploy the application to staging and run smoke tests."
+    tools: [file_read, file_write, shell_exec]
+    budget:
+      max_tokens: 30000
+      max_cost_usd: 1.20
+    capabilities:
+      - type: "tool:file_read"
+      - type: "tool:file_write"
+      - type: "tool:shell_exec"
+      - type: "path:deploy/**"
+      - type: "action:secret:DEPLOY_KEY"
+
+  notifier:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Send deployment notification with summary to the team."
+    tools: [file_read, web_search]
+    budget:
+      max_tokens: 10000
+      max_cost_usd: 0.40
+    capabilities:
+      - type: "tool:file_read"
+      - type: "tool:web_search"
+      - type: "domain:hooks.slack.com"
+      - type: "action:secret:SLACK_WEBHOOK"
+
+tasks:
+  analyze:
+    name: analyze
+    agent: code_analyzer
+    description: "Analyze recent code changes, identify affected modules, and assess risk."
+    workspace: shared
+
+  security_scan:
+    name: security_scan
+    agent: security_scanner
+    description: "Scan changed files for security vulnerabilities and known CVEs."
+    depends_on: [analyze]
+    workspace: shared
+
+  lint_check:
+    name: lint_check
+    agent: lint_checker
+    description: "Run linting, type checks, and style enforcement on changed files."
+    depends_on: [analyze]
+    workspace: shared
+
+  deploy_gate:
+    name: deploy_gate
+    type: approval_gate
+    depends_on: [security_scan, lint_check]
+    prompt: "Security scan and lint checks complete. Approve deployment to staging?"
+
+  deploy:
+    name: deploy
+    agent: deployer
+    description: "Deploy to staging environment and run smoke tests."
+    depends_on: [deploy_gate]
+    workspace: shared
+
+  notify:
+    name: notify
+    agent: notifier
+    description: "Send deployment summary and status notification to the team channel."
+    depends_on: [deploy]
+    workspace: shared
