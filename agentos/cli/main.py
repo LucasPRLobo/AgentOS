@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 import uuid
 from pathlib import Path
@@ -42,11 +44,16 @@ cli.add_command(cost)
 @cli.command()
 @click.argument("yaml_file", default="examples/linear_research.yaml", type=click.Path(exists=True))
 @click.option("--db", default=":memory:", help="SQLite database path (default: in-memory)")
-def demo(yaml_file: str, db: str) -> None:
-    """Run a workflow with stub executors (no real LLM calls).
+@click.option("--tier", default=0, type=click.IntRange(0, 2),
+              help="Adapter tier: 0=stub (default), 2=Tier 2 Claude Code (mocked)")
+def demo(yaml_file: str, db: str, tier: int) -> None:
+    """Run a workflow with stub or adapter-based executors (no real LLM calls).
 
     Loads a workflow YAML, validates the DAG, runs it with simulated agents,
     enforces budgets, and prints a summary of the full event log.
+
+    Use --tier 2 to exercise the Tier 2 Claude Code adapter path (with a
+    mocked subprocess that simulates Claude Code's JSON output).
     """
     # --- Load workflow YAML ---
     yaml_path = Path(yaml_file)
@@ -83,21 +90,63 @@ def demo(yaml_file: str, db: str) -> None:
     # --- Gate manager ---
     gate_mgr = GateManager(event_log, seq, workflow_id)
 
+    tier_label = {0: "stub", 2: "Tier 2 (Claude Code, mocked)"}
     click.echo(f"  Workspace: {ws_root}")
+    click.echo(f"  Executor:  {tier_label.get(tier, f'Tier {tier}')}")
     click.echo()
 
-    # --- Stub task executor ---
+    # --- Build Tier 2 adapters if requested ---
+    tier2_adapters: dict[str, object] = {}
+    tier2_mock_sub = None
+    if tier == 2:
+        from agentos.adapters.tier2_claude_code import ClaudeCodeAdapter
+
+        def _mock_subprocess(cmd, *, cwd=None, capture_output=True, text=True, timeout=None, env=None):
+            """Simulates Claude Code: writes manifest.json, returns usage JSON."""
+            if cwd:
+                manifest = {
+                    "summary": f"Completed work in {Path(cwd).name}.",
+                    "findings": [{"finding": "Demo finding", "confidence": "medium"}],
+                    "open_questions": [],
+                }
+                (Path(cwd) / "manifest.json").write_text(json.dumps(manifest))
+
+            class _Result:
+                returncode = 0
+                stdout = json.dumps({
+                    "usage": {"input_tokens": 250, "output_tokens": 250},
+                    "cost_usd": 0.01,
+                })
+                stderr = ""
+
+            return _Result()
+
+        tier2_mock_sub = _mock_subprocess
+        for agent_name in workflow.agents:
+            tier2_adapters[agent_name] = ClaudeCodeAdapter(
+                budget_mgr, agent_name, run_subprocess=tier2_mock_sub,
+            )
+
+    # --- Task executor ---
     def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
         if config.type == "approval_gate":
             gate_id = gate_mgr.create_gate(task_name, GateType.APPROVAL, config.prompt)
             click.echo(click.style(f"  GATE  {task_name}", fg="yellow") +
                        f" — {config.prompt or 'Awaiting approval'}")
             gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="demo")
-            click.echo(click.style("        ✓ auto-approved (demo mode)", fg="yellow"))
+            click.echo(click.style("        auto-approved (demo mode)", fg="yellow"))
             time.sleep(0.2)
             return TaskStatus.SUCCEEDED
 
         agent_id = config.agent or "unassigned"
+
+        if tier == 2 and agent_id in tier2_adapters:
+            return _run_tier2_task(
+                task_name, config, agent_id, tier2_adapters[agent_id],
+                workflow, workspace, ws_root,
+            )
+
+        # Default: stub executor (tier 0)
         click.echo(click.style(f"  RUN   {task_name}", fg="blue") +
                    f" (agent: {agent_id})")
         if config.description:
@@ -115,7 +164,6 @@ def demo(yaml_file: str, db: str) -> None:
             cost_usd=0.01,
         ))
 
-        # Write a stub output file into the workspace
         output_content = (
             f"# Task: {task_name}\n"
             f"Agent: {agent_id}\n"
@@ -221,6 +269,59 @@ def demo(yaml_file: str, db: str) -> None:
     if db != ":memory:":
         click.echo(f"  Persisted to: {db}")
     click.echo()
+
+
+def _run_tier2_task(
+    task_name: str,
+    config: TaskConfig,
+    agent_id: str,
+    adapter: object,
+    workflow: WorkflowDefinition,
+    workspace: Workspace,
+    ws_root: Path,
+) -> TaskStatus:
+    """Execute a task via the Tier 2 Claude Code adapter."""
+    click.echo(click.style(f"  T2    {task_name}", fg="magenta") +
+               f" (agent: {agent_id}, adapter: Claude Code)")
+    if config.description:
+        desc = config.description.strip()
+        if len(desc) > 100:
+            desc = desc[:97] + "..."
+        click.echo(f"        {desc}")
+
+    task_ws = ws_root / task_name
+    task_ws.mkdir(exist_ok=True)
+
+    agent_cfg = workflow.agents.get(agent_id)
+    role = agent_cfg.role if agent_cfg else ""
+
+    output = asyncio.run(adapter.execute_task(  # type: ignore[attr-defined]
+        task_description=config.description or task_name,
+        role=role,
+        workspace=task_ws,
+        predecessor_context=[],
+        allowed_tools=["Read", "Write", "Bash"],
+    ))
+
+    if output.status == TaskStatus.SUCCEEDED:
+        click.echo(click.style(f"  DONE  {task_name}", fg="green") +
+                   f" → manifest: {output.summary}")
+        if output.metrics:
+            click.echo(f"        tokens={output.metrics.tokens_consumed}, "
+                       f"cost=${output.metrics.estimated_cost_usd:.3f}, "
+                       f"calls={output.metrics.api_calls_made}")
+        # Track the manifest in workspace
+        manifest_path = task_ws / "manifest.json"
+        if manifest_path.exists():
+            workspace.write_file(
+                f"{task_name}/manifest.json", manifest_path.read_text(),
+                agent_id=agent_id, task_id=task_name,
+            )
+    else:
+        click.echo(click.style(f"  FAIL  {task_name}", fg="red") +
+                   f" — {output.summary}")
+
+    return output.status
 
 
 def _event_color(event_type: str) -> str:
