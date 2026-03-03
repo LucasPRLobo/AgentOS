@@ -13,9 +13,11 @@ from agentos.kernel.budget_manager import BudgetManager
 from agentos.kernel.dag_executor import DAGExecutor
 from agentos.kernel.event_log import SQLiteEventLog
 from agentos.kernel.seq import SeqCounter
+from agentos.kernel.workspace import Workspace
 from agentos.schemas.budget import BudgetDelta
 from agentos.schemas.task import TaskConfig, TaskStatus
 from agentos.schemas.workflow import WorkflowDefinition
+from agentos.schemas.workspace import WorkspaceConfig
 
 
 @click.group()
@@ -58,6 +60,15 @@ def demo(yaml_file: str, db: str) -> None:
         agent_specs=agent_specs,
     )
 
+    # --- Workspace ---
+    ws_root = Path(f"/tmp/agentos-demo-{workflow_id}")
+    ws_config = WorkspaceConfig(root=str(ws_root))
+    workspace = Workspace(ws_config, event_log, seq, workflow_id=workflow_id)
+    workspace.ensure_root()
+
+    click.echo(f"  Workspace: {ws_root}")
+    click.echo()
+
     # --- Stub task executor ---
     def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
         if config.type == "approval_gate":
@@ -85,7 +96,20 @@ def demo(yaml_file: str, db: str) -> None:
             cost_usd=0.01,
         ))
 
-        click.echo(click.style(f"  DONE  {task_name}", fg="green"))
+        # Write a stub output file into the workspace
+        output_content = (
+            f"# Task: {task_name}\n"
+            f"Agent: {agent_id}\n"
+            f"Status: succeeded\n"
+            f"Summary: Stub output for demo — no real LLM call.\n"
+        )
+        workspace.write_file(
+            f"{task_name}/output.md", output_content,
+            agent_id=agent_id, task_id=task_name,
+        )
+
+        click.echo(click.style(f"  DONE  {task_name}", fg="green") +
+                   f" → {task_name}/output.md")
         return TaskStatus.SUCCEEDED
 
     # --- Execute ---
@@ -132,6 +156,17 @@ def demo(yaml_file: str, db: str) -> None:
         pct = total.cost_usd / workflow.budget.max_cost_usd * 100
         click.echo(f"  Cost cap:   {pct:.0f}% of ${workflow.budget.max_cost_usd:.2f}")
 
+    # --- Workspace summary ---
+    manifest = workspace.manifest
+    if manifest:
+        click.echo()
+        click.echo(click.style(" Workspace Files", fg="cyan", bold=True))
+        click.echo(click.style("-" * 40, fg="cyan"))
+        for entry in manifest:
+            click.echo(f"  {click.style(entry.operation.value, fg='green'):10s} "
+                       f"{entry.path:30s} ({entry.agent_id}, {entry.size_bytes}B)")
+        click.echo(f"  Root: {ws_root}")
+
     # --- Event log replay ---
     click.echo()
     click.echo(click.style(" Event Log", fg="cyan", bold=True))
@@ -165,12 +200,16 @@ def _event_color(event_type: str) -> str:
         return "magenta"
     if event_type.startswith("gate"):
         return "yellow"
+    if event_type.startswith("file"):
+        return "green"
     return "white"
 
 
 def _event_detail(event: object) -> str:
     """Extract a short detail string from an event's payload."""
     payload = event.payload  # type: ignore[attr-defined]
+    if "path" in payload:
+        return f"{payload.get('operation', '')} {payload['path']}"
     if "task_id" in payload:
         parts = [payload["task_id"]]
         if "to_state" in payload:
