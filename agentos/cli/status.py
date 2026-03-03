@@ -1,4 +1,4 @@
-"""CLI status commands — inspect workflow state, events, and costs."""
+"""CLI status commands — inspect workflow state, events, costs, and replay."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ import click
 
 from agentos.kernel.budget_manager import BudgetManager
 from agentos.kernel.event_log import SQLiteEventLog
+from agentos.kernel.replayer import WorkflowReplayer
 from agentos.kernel.seq import SeqCounter
 from agentos.schemas.budget import BudgetSpec
 from agentos.schemas.events import EventType
+from agentos.schemas.task import TaskStatus
 
 
 @click.command("status")
@@ -126,6 +128,117 @@ def cost(db: str, agent: str | None) -> None:
     click.echo("-" * 55)
     click.echo(f"  {'TOTAL':20s} {total_tokens:>8,} {total_calls:>6} "
                f"{total_time:>6.1f}s ${total_cost:>7.2f}")
+
+
+@click.command("replay")
+@click.option("--db", required=True, type=click.Path(exists=True), help="SQLite database path")
+@click.option("--workflow-id", required=True, help="Workflow ID to replay")
+def replay(db: str, workflow_id: str) -> None:
+    """Replay a workflow execution — full state reconstruction from events."""
+    event_log = SQLiteEventLog(db)
+    replayer = WorkflowReplayer(event_log)
+    snap = replayer.replay(workflow_id)
+
+    if snap.event_count == 0:
+        click.echo(f"No events found for workflow: {workflow_id}")
+        return
+
+    # Header
+    color_map = {"succeeded": "green", "failed": "red", "paused": "yellow", "running": "blue"}
+    status_color = color_map.get(snap.status, "white")
+
+    click.echo(click.style("=" * 60, fg="cyan"))
+    click.echo(click.style(f" Workflow Replay: {snap.workflow_name or workflow_id}", fg="cyan", bold=True))
+    click.echo(click.style("=" * 60, fg="cyan"))
+    click.echo(f"  ID:      {snap.workflow_id}")
+    click.echo(f"  Status:  {click.style(snap.status.upper(), fg=status_color, bold=True)}")
+    click.echo(f"  Tasks:   {snap.task_count}")
+    click.echo(f"  Events:  {snap.event_count}")
+    if snap.started_at:
+        click.echo(f"  Started: {snap.started_at}")
+    if snap.completed_at:
+        click.echo(f"  Ended:   {snap.completed_at}")
+
+    # Tasks
+    if snap.tasks:
+        click.echo()
+        click.echo(click.style(" Tasks", fg="cyan", bold=True))
+        click.echo(click.style("-" * 50, fg="cyan"))
+        state_colors = {
+            TaskStatus.SUCCEEDED: "green",
+            TaskStatus.FAILED: "red",
+            TaskStatus.WAITING: "yellow",
+            TaskStatus.RUNNING: "blue",
+            TaskStatus.PENDING: "white",
+        }
+        for name, task in sorted(snap.tasks.items()):
+            sc = state_colors.get(task.state, "white")
+            state_str = click.style(task.state.value.upper(), fg=sc)
+            click.echo(f"  {name:25s} {state_str:20s} agent={task.agent_id or '-'}")
+            if task.output and task.output.summary:
+                summary = task.output.summary[:60]
+                click.echo(f"  {'':25s} {summary}")
+
+    # Agents
+    if snap.agents:
+        click.echo()
+        click.echo(click.style(" Agents", fg="cyan", bold=True))
+        click.echo(click.style("-" * 50, fg="cyan"))
+        for aid, agent in sorted(snap.agents.items()):
+            term = agent.termination_reason or "active"
+            tier_str = f"T{agent.adapter_tier}"
+            click.echo(f"  {aid:20s} {agent.agent_name:15s} {tier_str:5s} {term}")
+
+    # Gates
+    if snap.gates:
+        click.echo()
+        click.echo(click.style(" Gates", fg="cyan", bold=True))
+        click.echo(click.style("-" * 50, fg="cyan"))
+        for gid, gate in snap.gates.items():
+            if gate.resolution:
+                res_color = "green" if gate.resolution == "approved" else "red"
+                res_str = click.style(gate.resolution.upper(), fg=res_color)
+            else:
+                res_str = click.style("PENDING", fg="yellow")
+            click.echo(f"  {gid}  {res_str}  task={gate.task_id}")
+
+    # Budget
+    if snap.budgets:
+        click.echo()
+        click.echo(click.style(" Budget", fg="cyan", bold=True))
+        click.echo(click.style("-" * 55, fg="cyan"))
+        click.echo(f"  {'Agent':20s} {'Tokens':>8s} {'Calls':>6s} {'Time':>7s} {'Cost':>8s}")
+        click.echo(click.style("-" * 55, fg="cyan"))
+        for aid, budget in sorted(snap.budgets.items()):
+            u = budget.usage
+            exceeded_mark = click.style(" !", fg="red") if budget.exceeded else ""
+            click.echo(f"  {aid:20s} {u.tokens_used:>8,} {u.api_calls_made:>6} "
+                       f"{u.time_elapsed_seconds:>6.1f}s ${u.cost_usd:>7.2f}{exceeded_mark}")
+        click.echo(click.style("-" * 55, fg="cyan"))
+        click.echo(f"  {'TOTAL':20s} {snap.total_tokens:>8,} "
+                   f"{'':>6} {'':>7s} ${snap.total_cost:>7.2f}")
+
+    # Errors
+    if snap.errors:
+        click.echo()
+        click.echo(click.style(" Errors", fg="red", bold=True))
+        click.echo(click.style("-" * 50, fg="red"))
+        for err in snap.errors:
+            click.echo(f"  {err}")
+
+    # Event timeline
+    click.echo()
+    click.echo(click.style(" Event Timeline", fg="cyan", bold=True))
+    click.echo(click.style("-" * 60, fg="cyan"))
+    for event in snap.events:
+        etype = event.event_type.value
+        ts = event.timestamp.strftime("%H:%M:%S")
+        detail = _payload_summary(event.payload)
+        click.echo(f"  [{event.seq:>3}] {ts} {etype:35s} {detail}")
+
+    click.echo()
+    click.echo(f"  Total: {snap.event_count} events")
+    click.echo()
 
 
 def _payload_summary(payload: dict) -> str:
