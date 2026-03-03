@@ -147,3 +147,135 @@ class TestCheckFresh:
     def test_check_before_any_usage(self, budget_manager: BudgetManager) -> None:
         """Check on fresh manager should pass without error."""
         budget_manager.check("agent-1")
+
+
+# ---------------------------------------------------------------------------
+# Sprint 7: Budget enforcement edge cases
+# ---------------------------------------------------------------------------
+
+class TestExactLimitBoundary:
+    """Verify behavior when usage exactly matches the limit."""
+
+    def test_exact_tokens_passes(self, event_log: SQLiteEventLog, seq: SeqCounter) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_tokens=1000),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+        )
+        mgr.apply("agent-1", BudgetDelta(tokens=1000))
+        # Exactly at limit — should NOT raise (current > limit, not >=)
+        assert mgr.usage_for("agent-1").tokens_used == 1000
+
+    def test_one_over_limit_fails(self, event_log: SQLiteEventLog, seq: SeqCounter) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_tokens=1000),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+        )
+        with pytest.raises(BudgetExceededError, match="tokens"):
+            mgr.apply("agent-1", BudgetDelta(tokens=1001))
+
+    def test_exact_cost_passes(self, event_log: SQLiteEventLog, seq: SeqCounter) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_cost_usd=1.00),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+        )
+        mgr.apply("agent-1", BudgetDelta(cost_usd=1.00))
+        assert mgr.usage_for("agent-1").cost_usd == pytest.approx(1.00)
+
+
+class TestGradualApproach:
+    """Many small allocations gradually approaching the limit."""
+
+    def test_many_small_allocations(self, event_log: SQLiteEventLog, seq: SeqCounter) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_tokens=1000),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+        )
+        for _ in range(100):
+            mgr.apply("agent-1", BudgetDelta(tokens=10))
+
+        assert mgr.usage_for("agent-1").tokens_used == 1000
+
+        with pytest.raises(BudgetExceededError):
+            mgr.apply("agent-1", BudgetDelta(tokens=1))
+
+    def test_gradual_cost_approach(self, event_log: SQLiteEventLog, seq: SeqCounter) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_cost_usd=1.00),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+        )
+        # Use 0.25 increments to avoid floating-point accumulation errors
+        for _ in range(4):
+            mgr.apply("agent-1", BudgetDelta(cost_usd=0.25))
+
+        assert mgr.usage_for("agent-1").cost_usd == pytest.approx(1.00)
+
+        with pytest.raises(BudgetExceededError, match="cost_usd"):
+            mgr.apply("agent-1", BudgetDelta(cost_usd=0.01))
+
+
+class TestApiCallsEnforcement:
+    """Verify api_calls limit is enforced."""
+
+    def test_api_calls_exceeded(self, event_log: SQLiteEventLog, seq: SeqCounter) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_api_calls=5),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+        )
+        for _ in range(5):
+            mgr.apply("agent-1", BudgetDelta(api_calls=1))
+
+        with pytest.raises(BudgetExceededError, match="api_calls"):
+            mgr.apply("agent-1", BudgetDelta(api_calls=1))
+
+    def test_api_calls_exact_limit_passes(self, event_log: SQLiteEventLog, seq: SeqCounter) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_api_calls=3),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+        )
+        mgr.apply("agent-1", BudgetDelta(api_calls=3))
+        assert mgr.usage_for("agent-1").api_calls_made == 3
+
+
+class TestTimeSecondsEnforcement:
+    """Verify time_seconds limit is enforced."""
+
+    def test_time_exceeded(self, event_log: SQLiteEventLog, seq: SeqCounter) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_time_seconds=60.0),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+        )
+        mgr.apply("agent-1", BudgetDelta(time_seconds=50.0))
+
+        with pytest.raises(BudgetExceededError, match="time_seconds"):
+            mgr.apply("agent-1", BudgetDelta(time_seconds=20.0))
+
+
+class TestWorkflowLimitOverridesAgent:
+    """Workflow-level limit takes precedence when agent limit is higher."""
+
+    def test_workflow_limit_enforced_over_agent(
+        self, event_log: SQLiteEventLog, seq: SeqCounter,
+    ) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_tokens=500),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+            agent_specs={"agent-1": BudgetSpec(max_tokens=10000)},
+        )
+        mgr.apply("agent-1", BudgetDelta(tokens=400))
+
+        # Agent limit is 10000, but workflow limit is 500
+        with pytest.raises(BudgetExceededError, match="tokens"):
+            mgr.apply("agent-1", BudgetDelta(tokens=200))
+
+    def test_agent_limit_enforced_under_workflow(
+        self, event_log: SQLiteEventLog, seq: SeqCounter,
+    ) -> None:
+        mgr = BudgetManager(
+            workflow_spec=BudgetSpec(max_tokens=10000),
+            event_log=event_log, seq=seq, workflow_id="test-wf",
+            agent_specs={"agent-1": BudgetSpec(max_tokens=500)},
+        )
+        mgr.apply("agent-1", BudgetDelta(tokens=400))
+
+        with pytest.raises(BudgetExceededError, match="tokens"):
+            mgr.apply("agent-1", BudgetDelta(tokens=200))
