@@ -28,11 +28,11 @@ def _make_workflow(
     )
 
 
-def _success_executor(task_id: str, config: TaskConfig) -> TaskStatus:
+def _success_executor(task_id: str, config: TaskConfig, predecessors=None) -> TaskStatus:
     return TaskStatus.SUCCEEDED
 
 
-def _fail_executor(task_id: str, config: TaskConfig) -> TaskStatus:
+def _fail_executor(task_id: str, config: TaskConfig, predecessors=None) -> TaskStatus:
     return TaskStatus.FAILED
 
 
@@ -64,7 +64,7 @@ class TestLinearExecution:
         """A -> B -> C executes in order, all events emitted."""
         execution_order: list[str] = []
 
-        def tracking_executor(task_id: str, config: TaskConfig) -> TaskStatus:
+        def tracking_executor(task_id: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             execution_order.append(task_id)
             return TaskStatus.SUCCEEDED
 
@@ -89,7 +89,7 @@ class TestParallelExecution:
         running = threading.Event()
         both_started = threading.Barrier(2, timeout=5)
 
-        def parallel_executor(task_id: str, config: TaskConfig) -> TaskStatus:
+        def parallel_executor(task_id: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             both_started.wait()  # blocks until both threads reach here
             return TaskStatus.SUCCEEDED
 
@@ -112,7 +112,7 @@ class TestFanoutFanin:
         execution_order: list[str] = []
         lock = threading.Lock()
 
-        def tracking_executor(task_id: str, config: TaskConfig) -> TaskStatus:
+        def tracking_executor(task_id: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             with lock:
                 execution_order.append(task_id)
             return TaskStatus.SUCCEEDED
@@ -166,7 +166,7 @@ class TestFailureHandling:
         """When B fails, C (depends on B) is not started."""
         executed: list[str] = []
 
-        def selective_executor(task_id: str, config: TaskConfig) -> TaskStatus:
+        def selective_executor(task_id: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             executed.append(task_id)
             if task_id == "b":
                 return TaskStatus.FAILED
@@ -195,7 +195,7 @@ class TestConcurrencyLimit:
         current_concurrent = 0
         lock = threading.Lock()
 
-        def counting_executor(task_id: str, config: TaskConfig) -> TaskStatus:
+        def counting_executor(task_id: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             nonlocal max_concurrent, current_concurrent
             with lock:
                 current_concurrent += 1
@@ -279,7 +279,7 @@ class TestEdgeCases:
         execution_order: list[str] = []
         lock = threading.Lock()
 
-        def tracking_executor(task_id: str, config: TaskConfig) -> TaskStatus:
+        def tracking_executor(task_id: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             with lock:
                 execution_order.append(task_id)
             return TaskStatus.SUCCEEDED

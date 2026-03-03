@@ -12,7 +12,7 @@ from agentos.kernel.event_log import EventLog
 from agentos.kernel.seq import SeqCounter
 from agentos.kernel.state_machine import TaskStateMachine
 from agentos.schemas.events import Event, EventType
-from agentos.schemas.task import TaskConfig, TaskStatus
+from agentos.schemas.task import TaskConfig, TaskOutput, TaskStatus
 from agentos.schemas.workflow import WorkflowDefinition
 
 
@@ -25,11 +25,13 @@ class WorkflowResult:
     completed_tasks: list[str] = field(default_factory=list)
     failed_tasks: list[str] = field(default_factory=list)
     skipped_tasks: list[str] = field(default_factory=list)
+    task_outputs: dict[str, TaskOutput] = field(default_factory=dict)
 
 
 # Type for the callable that actually executes a task.
+# Receives task name, config, and predecessor TaskOutputs.
 # Tests provide a stub; real adapters plug in later.
-TaskExecutorFn = Callable[[str, TaskConfig], TaskStatus]
+TaskExecutorFn = Callable[[str, TaskConfig, list[TaskOutput]], TaskStatus]
 
 
 class DAGExecutor:
@@ -121,13 +123,15 @@ class DAGExecutor:
         task_states: dict[str, TaskStatus] = {
             name: TaskStatus.PENDING for name in tasks
         }
+        # Collect TaskOutput from each completed task for structured handoffs
+        task_outputs: dict[str, TaskOutput] = {}
         max_workers = self._workflow.budget.max_concurrent_tasks
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             # Map future -> task name
             active: dict[Future, str] = {}
 
-            self._dispatch_ready(tasks, task_states, pool, active)
+            self._dispatch_ready(tasks, task_states, task_outputs, pool, active)
 
             while active:
                 done, _ = wait(active.keys(), return_when=FIRST_COMPLETED)
@@ -135,9 +139,10 @@ class DAGExecutor:
                 for future in done:
                     name = active.pop(future)
                     try:
-                        status = future.result()
+                        status, output = future.result()
                     except Exception:
                         status = TaskStatus.FAILED
+                        output = None
 
                     if status == TaskStatus.SUCCEEDED:
                         self._state_machine.transition(
@@ -145,6 +150,8 @@ class DAGExecutor:
                         )
                         task_states[name] = TaskStatus.SUCCEEDED
                         result.completed_tasks.append(name)
+                        if output is not None:
+                            task_outputs[name] = output
                     else:
                         self._state_machine.transition(
                             name, TaskStatus.RUNNING, TaskStatus.FAILED
@@ -153,14 +160,16 @@ class DAGExecutor:
                         result.failed_tasks.append(name)
                         self._skip_dependents(name, tasks, task_states, result)
 
-                self._dispatch_ready(tasks, task_states, pool, active)
+                self._dispatch_ready(tasks, task_states, task_outputs, pool, active)
 
+        result.task_outputs = task_outputs
         return result
 
     def _dispatch_ready(
         self,
         tasks: dict[str, TaskConfig],
         task_states: dict[str, TaskStatus],
+        task_outputs: dict[str, TaskOutput],
         pool: ThreadPoolExecutor,
         active: dict[Future, str],
     ) -> None:
@@ -183,8 +192,29 @@ class DAGExecutor:
             )
             task_states[name] = TaskStatus.RUNNING
 
-            future = pool.submit(self._task_executor, name, config)
+            # Gather predecessor outputs for structured handoffs
+            predecessor_context = [
+                task_outputs[dep]
+                for dep in config.depends_on
+                if dep in task_outputs
+            ]
+
+            future = pool.submit(self._run_task, name, config, predecessor_context)
             active[future] = name
+
+    def _run_task(
+        self,
+        name: str,
+        config: TaskConfig,
+        predecessor_context: list[TaskOutput],
+    ) -> tuple[TaskStatus, TaskOutput | None]:
+        """Execute a task and return (status, optional TaskOutput)."""
+        result = self._task_executor(name, config, predecessor_context)
+        if isinstance(result, tuple):
+            # Executor returned (TaskStatus, TaskOutput)
+            return result
+        # Legacy: executor returned just TaskStatus
+        return result, None
 
     def _skip_dependents(
         self,

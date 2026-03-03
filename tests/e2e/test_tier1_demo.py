@@ -51,7 +51,7 @@ def _run_workflow(yaml_path: str, tmp_path) -> dict:
     )
     workspace.ensure_root()
 
-    def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+    def task_executor(task_name: str, config: TaskConfig, predecessors=None) -> TaskStatus:
         if config.type == "approval_gate":
             gate_id = gate_mgr.create_gate(task_name, GateType.APPROVAL, config.prompt)
             gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="e2e-test")

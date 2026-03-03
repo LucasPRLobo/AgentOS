@@ -19,7 +19,7 @@ from agentos.kernel.seq import SeqCounter
 from agentos.kernel.workspace import Workspace
 from agentos.schemas.budget import BudgetDelta
 from agentos.schemas.gate import GateResolution, GateType
-from agentos.schemas.task import TaskConfig, TaskStatus
+from agentos.schemas.task import Confidence, Finding, TaskConfig, TaskOutput, TaskStatus
 from agentos.schemas.workflow import WorkflowDefinition
 from agentos.schemas.workspace import WorkspaceConfig
 
@@ -128,7 +128,9 @@ def demo(yaml_file: str, db: str, tier: int) -> None:
             )
 
     # --- Task executor ---
-    def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+    def task_executor(task_name: str, config: TaskConfig, predecessors=None):
+        predecessors = predecessors or []
+
         if config.type == "approval_gate":
             gate_id = gate_mgr.create_gate(task_name, GateType.APPROVAL, config.prompt)
             click.echo(click.style(f"  GATE  {task_name}", fg="yellow") +
@@ -136,15 +138,26 @@ def demo(yaml_file: str, db: str, tier: int) -> None:
             gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="demo")
             click.echo(click.style("        auto-approved (demo mode)", fg="yellow"))
             time.sleep(0.2)
-            return TaskStatus.SUCCEEDED
+            return TaskStatus.SUCCEEDED, None
 
         agent_id = config.agent or "unassigned"
 
+        # Show predecessor handoffs
+        if predecessors:
+            ctx_ids = [c.task_id for c in predecessors]
+            click.echo(click.style(f"  RECV  {task_name}", fg="cyan") +
+                       f" ← context from: {', '.join(ctx_ids)}")
+
         if tier == 2 and agent_id in tier2_adapters:
-            return _run_tier2_task(
+            status = _run_tier2_task(
                 task_name, config, agent_id, tier2_adapters[agent_id],
                 workflow, workspace, ws_root,
             )
+            output = TaskOutput(
+                task_id=task_name, agent_id=agent_id,
+                status=status, summary=f"Tier 2: {task_name}",
+            )
+            return status, output
 
         # Default: stub executor (tier 0)
         click.echo(click.style(f"  RUN   {task_name}", fg="blue") +
@@ -177,7 +190,17 @@ def demo(yaml_file: str, db: str, tier: int) -> None:
 
         click.echo(click.style(f"  DONE  {task_name}", fg="green") +
                    f" → {task_name}/output.md")
-        return TaskStatus.SUCCEEDED
+
+        output = TaskOutput(
+            task_id=task_name, agent_id=agent_id,
+            status=TaskStatus.SUCCEEDED,
+            summary=f"Stub: completed {task_name}",
+            key_findings=[Finding(
+                finding=f"Demo finding from {task_name}",
+                confidence=Confidence.MEDIUM,
+            )],
+        )
+        return TaskStatus.SUCCEEDED, output
 
     # --- Execute ---
     click.echo(click.style("=" * 60, fg="cyan"))
@@ -205,6 +228,20 @@ def demo(yaml_file: str, db: str, tier: int) -> None:
     click.echo(f"  Completed: {len(result.completed_tasks)}")
     click.echo(f"  Failed:    {len(result.failed_tasks)}")
     click.echo(f"  Skipped:   {len(result.skipped_tasks)}")
+
+    # --- Structured handoffs summary ---
+    if result.task_outputs:
+        click.echo()
+        click.echo(click.style(" Structured Handoffs", fg="cyan", bold=True))
+        click.echo(click.style("-" * 40, fg="cyan"))
+        for task_name, output in result.task_outputs.items():
+            findings_count = len(output.key_findings)
+            questions_count = len(output.open_questions)
+            click.echo(f"  {task_name:20s} → {output.summary[:50]}")
+            if findings_count:
+                click.echo(f"  {'':20s}   {findings_count} finding(s)")
+            if questions_count:
+                click.echo(f"  {'':20s}   {questions_count} open question(s)")
 
     # --- Budget summary ---
     click.echo()

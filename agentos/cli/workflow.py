@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections import defaultdict
 from pathlib import Path
 
 import click
@@ -21,6 +20,7 @@ from agentos.schemas.gate import GateResolution, GateType
 from agentos.schemas.task import TaskConfig, TaskStatus
 from agentos.schemas.workflow import WorkflowDefinition
 from agentos.schemas.workspace import WorkspaceConfig
+from agentos.validation.workflow_verifier import WorkflowVerifier
 
 
 @click.group()
@@ -62,7 +62,7 @@ def run(yaml_file: str, db: str) -> None:
     )
     workspace.ensure_root()
 
-    def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+    def task_executor(task_name: str, config: TaskConfig, predecessors=None) -> TaskStatus:
         if config.type == "approval_gate":
             gate_id = gate_mgr.create_gate(task_name, GateType.APPROVAL, config.prompt)
             gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="auto")
@@ -129,69 +129,23 @@ def verify(yaml_file: str) -> None:
         click.echo(click.style(f"Schema validation error: {exc}", fg="red"))
         raise SystemExit(1)
 
-    errors: list[str] = []
-    warnings: list[str] = []
-    task_names = set(wf.tasks.keys())
-    agent_names = set(wf.agents.keys())
+    verifier = WorkflowVerifier()
+    report = verifier.verify(wf)
 
-    # Check missing dependencies
-    for name, config in wf.tasks.items():
-        for dep in config.depends_on:
-            if dep not in task_names:
-                errors.append(f"Task {name!r} depends on {dep!r}, which does not exist")
-
-    # Check agent references
-    for name, config in wf.tasks.items():
-        if config.agent and config.agent not in agent_names:
-            errors.append(f"Task {name!r} references agent {config.agent!r}, which is not defined")
-
-    # Cycle detection via Kahn's algorithm
-    adj: dict[str, list[str]] = defaultdict(list)
-    in_deg: dict[str, int] = {name: 0 for name in task_names}
-    for name, config in wf.tasks.items():
-        for dep in config.depends_on:
-            if dep in task_names:
-                adj[dep].append(name)
-                in_deg[name] += 1
-
-    queue = [n for n, d in in_deg.items() if d == 0]
-    visited = 0
-    while queue:
-        node = queue.pop(0)
-        visited += 1
-        for dep in adj[node]:
-            in_deg[dep] -= 1
-            if in_deg[dep] == 0:
-                queue.append(dep)
-
-    if visited != len(task_names):
-        errors.append("Workflow contains a cycle")
-
-    # Check for unreachable tasks (no path from any root)
-    roots = {name for name, config in wf.tasks.items() if not config.depends_on}
-    if not roots and wf.tasks:
-        errors.append("No root tasks found (all tasks have dependencies)")
-
-    # Check gates have no agent assigned
-    for name, config in wf.tasks.items():
-        if config.type in ("approval_gate", "input_gate") and config.agent:
-            warnings.append(f"Gate {name!r} has an agent assigned (will be ignored)")
-
-    # Report
     click.echo(f"Workflow: {wf.name}")
     click.echo(f"Tasks: {len(wf.tasks)} | Agents: {len(wf.agents)}")
     click.echo()
 
-    if errors:
-        for err in errors:
-            click.echo(click.style(f"  ERROR: {err}", fg="red"))
+    if report.errors:
+        for issue in report.errors:
+            click.echo(click.style(f"  ERROR [{issue.code}]: {issue.message}", fg="red"))
         click.echo()
         click.echo(click.style("Verification FAILED", fg="red", bold=True))
         raise SystemExit(1)
 
-    if warnings:
-        for warn in warnings:
-            click.echo(click.style(f"  WARN: {warn}", fg="yellow"))
+    if report.warnings:
+        for issue in report.warnings:
+            click.echo(click.style(f"  WARN [{issue.code}]: {issue.message}", fg="yellow"))
         click.echo()
 
     click.echo(click.style("Verification PASSED", fg="green", bold=True))

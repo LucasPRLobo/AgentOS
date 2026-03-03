@@ -114,7 +114,7 @@ class TestLinearWorkflowIntegration:
         # Track which tasks were executed and in what order
         execution_log: list[str] = []
 
-        def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+        def task_executor(task_name: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             execution_log.append(task_name)
 
             if config.type == "approval_gate":
@@ -178,7 +178,7 @@ class TestParallelWorkflowIntegration:
             agent_specs=agent_specs,
         )
 
-        def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+        def task_executor(task_name: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             agent_id = config.agent or "unknown"
             budget_mgr.apply(agent_id, BudgetDelta(
                 tokens=300, api_calls=1, time_seconds=0.1, cost_usd=0.01,
@@ -230,7 +230,7 @@ class TestFanoutWorkflowIntegration:
             agent_specs=agent_specs,
         )
 
-        def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+        def task_executor(task_name: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             if config.type == "approval_gate":
                 return TaskStatus.SUCCEEDED
             agent_id = config.agent or "unknown"

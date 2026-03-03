@@ -132,7 +132,7 @@ class TestTier2LinearWorkflow:
 
         execution_log: list[str] = []
 
-        def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+        def task_executor(task_name: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             execution_log.append(task_name)
 
             if config.type == "approval_gate":
@@ -222,7 +222,7 @@ class TestTier2ParallelWorkflow:
             for name in workflow.agents
         }
 
-        def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+        def task_executor(task_name: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             agent_id = config.agent or "unknown"
             adapter = adapters.get(agent_id)
             if adapter is None:
@@ -296,7 +296,7 @@ class TestTier2FanoutWorkflow:
             for name in workflow.agents
         }
 
-        def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+        def task_executor(task_name: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             if config.type == "approval_gate":
                 gate_id = gate_mgr.create_gate(task_name, GateType.APPROVAL, config.prompt)
                 gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="test")
@@ -373,7 +373,7 @@ class TestTier2BudgetEnforcement:
         # Subprocess uses 200 tokens — will exceed budget on first call
         mock_sub = make_mock_subprocess(tokens=200, cost=0.01)
 
-        def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
+        def task_executor(task_name: str, config: TaskConfig, predecessors=None) -> TaskStatus:
             if config.type == "approval_gate":
                 return TaskStatus.SUCCEEDED
 
