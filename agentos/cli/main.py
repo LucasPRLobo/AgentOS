@@ -46,7 +46,9 @@ cli.add_command(cost)
 @click.option("--db", default=":memory:", help="SQLite database path (default: in-memory)")
 @click.option("--tier", default=0, type=click.IntRange(0, 2),
               help="Adapter tier: 0=stub (default), 2=Tier 2 Claude Code (mocked)")
-def demo(yaml_file: str, db: str, tier: int) -> None:
+@click.option("--pause-at-gates", is_flag=True, default=False,
+              help="Pause at gates instead of auto-approving (requires --db)")
+def demo(yaml_file: str, db: str, tier: int, pause_at_gates: bool) -> None:
     """Run a workflow with stub or adapter-based executors (no real LLM calls).
 
     Loads a workflow YAML, validates the DAG, runs it with simulated agents,
@@ -54,7 +56,13 @@ def demo(yaml_file: str, db: str, tier: int) -> None:
 
     Use --tier 2 to exercise the Tier 2 Claude Code adapter path (with a
     mocked subprocess that simulates Claude Code's JSON output).
+
+    Use --pause-at-gates to stop at gates for manual resolution via
+    `agentos gate approve <gate-id> --db <path>`.
     """
+    if pause_at_gates and db == ":memory:":
+        click.echo(click.style("Error: --pause-at-gates requires --db to persist state.", fg="red"))
+        raise SystemExit(1)
     # --- Load workflow YAML ---
     yaml_path = Path(yaml_file)
     click.echo(click.style(f"Loading workflow: {yaml_path}", fg="cyan"))
@@ -135,6 +143,12 @@ def demo(yaml_file: str, db: str, tier: int) -> None:
             gate_id = gate_mgr.create_gate(task_name, GateType.APPROVAL, config.prompt)
             click.echo(click.style(f"  GATE  {task_name}", fg="yellow") +
                        f" — {config.prompt or 'Awaiting approval'}")
+
+            if pause_at_gates:
+                click.echo(click.style(f"        PAUSED — resolve with:", fg="yellow"))
+                click.echo(click.style(f"        agentos gate approve {gate_id} --db {db}", fg="yellow"))
+                return TaskStatus.WAITING, None
+
             gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="demo")
             click.echo(click.style("        auto-approved (demo mode)", fg="yellow"))
             time.sleep(0.2)
@@ -223,11 +237,14 @@ def demo(yaml_file: str, db: str, tier: int) -> None:
     click.echo(click.style(" Result", fg="cyan", bold=True))
     click.echo(click.style("=" * 60, fg="cyan"))
 
-    status_color = "green" if result.status == "succeeded" else "red"
+    color_map = {"succeeded": "green", "failed": "red", "paused": "yellow"}
+    status_color = color_map.get(result.status, "white")
     click.echo(f"  Workflow: {click.style(result.status.upper(), fg=status_color, bold=True)}")
     click.echo(f"  Completed: {len(result.completed_tasks)}")
     click.echo(f"  Failed:    {len(result.failed_tasks)}")
     click.echo(f"  Skipped:   {len(result.skipped_tasks)}")
+    if result.waiting_tasks:
+        click.echo(f"  Waiting:   {len(result.waiting_tasks)}")
 
     # --- Structured handoffs summary ---
     if result.task_outputs:
@@ -303,6 +320,19 @@ def demo(yaml_file: str, db: str, tier: int) -> None:
 
     click.echo()
     click.echo(f"  Total events: {len(events)}")
+    if result.status == "paused":
+        pending = gate_mgr.list_pending()
+        if pending:
+            click.echo()
+            click.echo(click.style(" Pending Gates — resolve to continue", fg="yellow", bold=True))
+            click.echo(click.style("-" * 40, fg="yellow"))
+            for g in pending:
+                click.echo(f"  {g.gate_id}  {g.prompt}")
+                click.echo(f"    agentos gate approve {g.gate_id} --db {db}")
+            click.echo()
+            click.echo(f"  Then resume:")
+            click.echo(f"    agentos workflow resume {yaml_file} {workflow_id} --db {db}")
+
     if db != ":memory:":
         click.echo(f"  Persisted to: {db}")
     click.echo()

@@ -21,10 +21,11 @@ class WorkflowResult:
     """Result of a workflow execution."""
 
     workflow_id: str
-    status: str  # "succeeded" | "failed"
+    status: str  # "succeeded" | "failed" | "paused"
     completed_tasks: list[str] = field(default_factory=list)
     failed_tasks: list[str] = field(default_factory=list)
     skipped_tasks: list[str] = field(default_factory=list)
+    waiting_tasks: list[str] = field(default_factory=list)
     task_outputs: dict[str, TaskOutput] = field(default_factory=dict)
 
 
@@ -74,9 +75,97 @@ class DAGExecutor:
 
         result = self._execute(workflow_id, tasks)
 
-        status = "failed" if result.failed_tasks else "succeeded"
-        result.status = status
-        self._emit_workflow_completed(workflow_id, status)
+        if result.waiting_tasks:
+            result.status = "paused"
+            self._emit_workflow_paused(workflow_id)
+        else:
+            status = "failed" if result.failed_tasks else "succeeded"
+            result.status = status
+            self._emit_workflow_completed(workflow_id, status)
+        return result
+
+    def resume(self, workflow_id: str) -> WorkflowResult:
+        """Resume a paused workflow by re-deriving state from the event log.
+
+        Checks for resolved gates and continues DAG execution from where
+        it left off. Task outputs are reconstructed from persisted events.
+        """
+        self._state_machine = TaskStateMachine(
+            self._event_log, self._seq, workflow_id
+        )
+        tasks = self._workflow.tasks
+
+        # Re-derive task states from event log
+        task_states: dict[str, TaskStatus] = {}
+        for name in tasks:
+            task_states[name] = self._state_machine.get_state(name)
+
+        # Re-derive task outputs from TASK_OUTPUT_PRODUCED events
+        task_outputs: dict[str, TaskOutput] = {}
+        output_events = self._event_log.query(
+            workflow_id=workflow_id,
+            event_type=EventType.TASK_OUTPUT_PRODUCED,
+        )
+        for event in output_events:
+            tid = event.payload.get("task_id", "")
+            if tid in tasks:
+                task_outputs[tid] = TaskOutput.model_validate(
+                    event.payload["output"]
+                )
+
+        # Check for resolved gates — transition WAITING → RUNNING
+        gate_resolved_ids: set[str] = set()
+        for event in self._event_log.query(
+            workflow_id=workflow_id,
+            event_type=EventType.GATE_RESOLVED,
+        ):
+            gate_resolved_ids.add(event.payload.get("gate_id", ""))
+
+        for name, state in task_states.items():
+            if state != TaskStatus.WAITING:
+                continue
+            # Find the gate for this waiting task
+            gate_events = self._event_log.query(
+                workflow_id=workflow_id,
+                event_type=EventType.GATE_WAITING,
+            )
+            for ge in gate_events:
+                if ge.payload.get("task_id") == name:
+                    gid = ge.payload.get("gate_id", "")
+                    if gid in gate_resolved_ids:
+                        self._state_machine.transition(
+                            name, TaskStatus.WAITING, TaskStatus.RUNNING
+                        )
+                        task_states[name] = TaskStatus.RUNNING
+                        # Immediately mark as succeeded (gate is resolved)
+                        self._state_machine.transition(
+                            name, TaskStatus.RUNNING, TaskStatus.SUCCEEDED
+                        )
+                        task_states[name] = TaskStatus.SUCCEEDED
+                    break
+
+        # Build result from current state
+        result = WorkflowResult(workflow_id=workflow_id, status="")
+        for name, state in task_states.items():
+            if state == TaskStatus.SUCCEEDED:
+                result.completed_tasks.append(name)
+            elif state == TaskStatus.FAILED:
+                result.failed_tasks.append(name)
+            elif state == TaskStatus.WAITING:
+                result.waiting_tasks.append(name)
+
+        # Continue executing any newly-ready tasks
+        result = self._execute_from_state(
+            workflow_id, tasks, task_states, task_outputs, result
+        )
+
+        if result.waiting_tasks:
+            result.status = "paused"
+            self._emit_workflow_paused(workflow_id)
+        else:
+            status = "failed" if result.failed_tasks else "succeeded"
+            result.status = status
+            self._emit_workflow_completed(workflow_id, status)
         return result
 
     def _validate_dag(self) -> None:
@@ -123,12 +212,23 @@ class DAGExecutor:
         task_states: dict[str, TaskStatus] = {
             name: TaskStatus.PENDING for name in tasks
         }
-        # Collect TaskOutput from each completed task for structured handoffs
         task_outputs: dict[str, TaskOutput] = {}
+        return self._execute_from_state(
+            workflow_id, tasks, task_states, task_outputs, result
+        )
+
+    def _execute_from_state(
+        self,
+        workflow_id: str,
+        tasks: dict[str, TaskConfig],
+        task_states: dict[str, TaskStatus],
+        task_outputs: dict[str, TaskOutput],
+        result: WorkflowResult,
+    ) -> WorkflowResult:
+        """Run tasks from a given state, respecting dependencies."""
         max_workers = self._workflow.budget.max_concurrent_tasks
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            # Map future -> task name
             active: dict[Future, str] = {}
 
             self._dispatch_ready(tasks, task_states, task_outputs, pool, active)
@@ -152,6 +252,13 @@ class DAGExecutor:
                         result.completed_tasks.append(name)
                         if output is not None:
                             task_outputs[name] = output
+                            self._emit_task_output(workflow_id, name, output)
+                    elif status == TaskStatus.WAITING:
+                        self._state_machine.transition(
+                            name, TaskStatus.RUNNING, TaskStatus.WAITING
+                        )
+                        task_states[name] = TaskStatus.WAITING
+                        result.waiting_tasks.append(name)
                     else:
                         self._state_machine.transition(
                             name, TaskStatus.RUNNING, TaskStatus.FAILED
@@ -231,6 +338,28 @@ class DAGExecutor:
                 task_states[name] = TaskStatus.FAILED
                 result.skipped_tasks.append(name)
                 self._skip_dependents(name, tasks, task_states, result)
+
+    def _emit_task_output(
+        self, workflow_id: str, task_name: str, output: TaskOutput,
+    ) -> None:
+        """Persist a task's structured output as an event."""
+        self._event_log.append(Event(
+            event_type=EventType.TASK_OUTPUT_PRODUCED,
+            workflow_id=workflow_id,
+            seq=self._seq.next(),
+            payload={
+                "task_id": task_name,
+                "output": output.model_dump(mode="json"),
+            },
+        ))
+
+    def _emit_workflow_paused(self, workflow_id: str) -> None:
+        self._event_log.append(Event(
+            event_type=EventType.WORKFLOW_COMPLETED,
+            workflow_id=workflow_id,
+            seq=self._seq.next(),
+            payload={"status": "paused"},
+        ))
 
     def _emit_workflow_started(self, workflow_id: str) -> None:
         self._event_log.append(Event(
