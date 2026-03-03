@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agentos.adapters.base import AgentAdapter
 from agentos.kernel.budget_manager import BudgetManager
@@ -30,7 +31,7 @@ from agentos.schemas.task import (
 MAX_MANIFEST_RETRIES = 2
 
 # Default timeout for a single Claude Code invocation (seconds).
-DEFAULT_TIMEOUT = 120
+DEFAULT_TIMEOUT = 300
 
 
 def _build_prompt(
@@ -97,17 +98,118 @@ def _write_predecessor_context(workspace: Path, predecessors: list[TaskOutput]) 
 def _build_command(
     prompt: str,
     allowed_tools: list[str],
+    *,
+    output_format: str = "json",
 ) -> list[str]:
     """Build the claude CLI command."""
     cmd = [
         "claude",
         "--print",
-        "--output-format", "json",
-        "-p", prompt,
+        "--output-format", output_format,
+        "--max-turns", "30",
     ]
+    # stream-json requires --verbose in --print mode
+    if output_format == "stream-json":
+        cmd.append("--verbose")
+    cmd.extend(["-p", prompt])
     if allowed_tools:
         cmd.extend(["--allowedTools", ",".join(allowed_tools)])
     return cmd
+
+
+def _format_stream_event(event: dict[str, Any]) -> str | None:
+    """Format a stream-json event as a human-readable log line, or None to skip."""
+    etype = event.get("type", "")
+
+    if etype == "assistant":
+        msg = event.get("message", {})
+        parts = []
+        for block in msg.get("content", []):
+            btype = block.get("type", "")
+            if btype == "tool_use":
+                name = block.get("name", "?")
+                inp = block.get("input", {})
+                if name in ("Read", "file_read"):
+                    parts.append(f"Read {inp.get('file_path', inp.get('path', ''))}")
+                elif name in ("Write", "file_write"):
+                    parts.append(f"Write {inp.get('file_path', inp.get('path', ''))}")
+                elif name in ("Bash", "shell_exec"):
+                    parts.append(f"Bash: {inp.get('command', '')[:80]}")
+                elif name in ("WebSearch", "web_search"):
+                    parts.append(f"Search: {inp.get('query', '')[:80]}")
+                elif name == "WebFetch":
+                    parts.append(f"Fetch: {inp.get('url', '')[:60]}")
+                else:
+                    parts.append(name)
+            elif btype == "text":
+                text = block.get("text", "").strip()
+                if text:
+                    first_line = text.split("\n")[0][:120]
+                    parts.append(first_line)
+        return " | ".join(parts) if parts else None
+
+    return None
+
+
+def _run_streaming(
+    cmd: list[str],
+    cwd: str,
+    env: dict[str, str],
+    timeout: int,
+    log_fn: Callable[[str], None],
+) -> subprocess.CompletedProcess:
+    """Run claude CLI with stream-json, streaming events via log_fn.
+
+    Returns a CompletedProcess whose ``stdout`` contains the JSON-encoded
+    ``result`` event (compatible with the non-streaming code path).
+    """
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=env,
+    )
+
+    result_json = "{}"
+
+    def _process_stdout():
+        nonlocal result_json
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if event.get("type") == "result":
+                result_json = line
+            else:
+                formatted = _format_stream_event(event)
+                if formatted:
+                    log_fn(formatted)
+
+    def _drain_stderr():
+        for _ in proc.stderr:
+            pass
+
+    t_out = threading.Thread(target=_process_stdout, daemon=True)
+    t_err = threading.Thread(target=_drain_stderr, daemon=True)
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
+        raise
+
+    t_out.join(timeout=5)
+    t_err.join(timeout=5)
+
+    return subprocess.CompletedProcess(cmd, proc.returncode, result_json, "")
 
 
 def _build_env() -> dict[str, str]:
@@ -121,8 +223,23 @@ def _parse_usage(output: dict[str, Any]) -> tuple[int, float]:
     """Extract token count and cost from Claude Code JSON output.
 
     Returns (total_tokens, estimated_cost_usd).
+
+    Handles two formats:
+    - Real CLI: {"total_cost_usd": 0.123, "duration_ms": 45000, ...}
+    - Mock/test: {"usage": {"input_tokens": ..., "output_tokens": ...}}
     """
-    # Claude Code JSON output may have various structures
+    # Real Claude Code CLI output has total_cost_usd at top level
+    if "total_cost_usd" in output:
+        cost = output["total_cost_usd"]
+        # Prefer actual token counts from usage block if available
+        usage = output.get("usage", {})
+        tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        if not tokens and cost:
+            # Fallback: estimate tokens from cost (~$9/1M tokens average)
+            tokens = int(cost * 1_000_000 / 9.0)
+        return tokens, cost
+
+    # Mock/test format with explicit usage block
     usage = output.get("usage", {})
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
@@ -202,6 +319,7 @@ class ClaudeCodeAdapter(AgentAdapter):
         *,
         timeout: int = DEFAULT_TIMEOUT,
         run_subprocess: Any | None = None,
+        log_fn: Callable[[str], None] | None = None,
     ) -> None:
         self._budget_manager = budget_manager
         self._agent_id = agent_id
@@ -210,6 +328,9 @@ class ClaudeCodeAdapter(AgentAdapter):
         self._terminated = False
         # Allow injecting a mock for subprocess.run in tests
         self._run_subprocess = run_subprocess or subprocess.run
+        self._log_fn = log_fn
+        # Stream events only when log_fn is set and no mock is injected
+        self._use_streaming = log_fn is not None and run_subprocess is None
 
     async def execute_task(
         self,
@@ -234,7 +355,8 @@ class ClaudeCodeAdapter(AgentAdapter):
         _write_predecessor_context(workspace, predecessor_context)
 
         prompt = _build_prompt(task_description, role, predecessor_context)
-        cmd = _build_command(prompt, allowed_tools)
+        out_fmt = "stream-json" if self._use_streaming else "json"
+        cmd = _build_command(prompt, allowed_tools, output_format=out_fmt)
         env = _build_env()
 
         total_tokens = 0
@@ -248,14 +370,20 @@ class ClaudeCodeAdapter(AgentAdapter):
                 break
 
             try:
-                result = self._run_subprocess(
-                    cmd,
-                    cwd=str(workspace),
-                    capture_output=True,
-                    text=True,
-                    timeout=self._timeout,
-                    env=env,
-                )
+                if self._use_streaming:
+                    result = _run_streaming(
+                        cmd, str(workspace), env,
+                        self._timeout, self._log_fn,
+                    )
+                else:
+                    result = self._run_subprocess(
+                        cmd,
+                        cwd=str(workspace),
+                        capture_output=True,
+                        text=True,
+                        timeout=self._timeout,
+                        env=env,
+                    )
             except subprocess.TimeoutExpired:
                 elapsed = time.monotonic() - start_time
                 return TaskOutput(
@@ -325,6 +453,7 @@ class ClaudeCodeAdapter(AgentAdapter):
                     "with the structure specified in the previous instructions. "
                     "The file must be valid JSON in the current directory.",
                     allowed_tools,
+                    output_format=out_fmt,
                 )
 
         # All retries exhausted

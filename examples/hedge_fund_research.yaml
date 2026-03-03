@@ -1,0 +1,153 @@
+# Hedge Fund Research Pipeline
+#
+# DAG structure:
+#
+#   fundamentals ──┐
+#                  ├─→ risk_assessment ─→ review_gate ─→ recommendation
+#   technicals ────┘        ↑
+#                           │
+#   macro_scan ─────────────┘
+#
+# Three analysts research in parallel, a risk analyst synthesizes,
+# a human reviews, then the PM produces a final recommendation.
+
+name: hedge_fund_research
+version: "1.0"
+
+budget:
+  max_tokens: 500000
+  max_cost_usd: 5.00
+  max_time_seconds: 1800
+
+agents:
+  fundamental_analyst:
+    adapter: tier2_claude_code
+    role: >
+      You are a fundamental equity analyst at a quantitative hedge fund.
+      You evaluate companies based on financial statements, valuation
+      multiples, earnings quality, and competitive positioning.
+      Be precise with numbers. Cite sources when possible.
+    tools: [web_search, file_read, file_write]
+    budget:
+      max_tokens: 120000
+      max_cost_usd: 1.50
+
+  technical_analyst:
+    adapter: tier2_claude_code
+    role: >
+      You are a technical analyst at a quantitative hedge fund.
+      You evaluate price action, volume patterns, momentum indicators,
+      and support/resistance levels. Focus on actionable signals
+      with clear timeframes.
+    tools: [web_search, file_read, file_write]
+    budget:
+      max_tokens: 120000
+      max_cost_usd: 1.50
+
+  macro_analyst:
+    adapter: tier2_claude_code
+    role: >
+      You are a macro research analyst at a hedge fund.
+      You evaluate sector trends, monetary policy impact, regulatory
+      risks, and macro headwinds/tailwinds relevant to specific equities.
+    tools: [web_search, file_read, file_write]
+    budget:
+      max_tokens: 120000
+      max_cost_usd: 1.50
+
+  risk_analyst:
+    adapter: tier2_claude_code
+    role: >
+      You are the risk manager at a hedge fund. You synthesize research
+      from multiple analysts into a unified risk assessment. Identify
+      contradictions between analyses, assign conviction levels, and
+      flag key risks. Be skeptical and thorough.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 120000
+      max_cost_usd: 1.50
+
+  portfolio_manager:
+    adapter: tier2_claude_code
+    role: >
+      You are a senior portfolio manager. Based on the risk-assessed
+      research, produce a final investment recommendation with position
+      sizing guidance, entry/exit criteria, and a clear thesis.
+      Write for an investment committee audience.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 120000
+      max_cost_usd: 1.50
+
+tasks:
+  fundamentals:
+    name: fundamentals
+    agent: fundamental_analyst
+    description: >
+      Analyze NVIDIA (NVDA) from a fundamental perspective.
+      Cover: revenue trends, margins, P/E vs peers, data center growth,
+      AI capex cycle exposure, and balance sheet strength.
+      Write your analysis to fundamentals.md.
+      Then create the required manifest.json.
+    workspace: fundamentals
+
+  technicals:
+    name: technicals
+    agent: technical_analyst
+    description: >
+      Analyze NVIDIA (NVDA) from a technical perspective.
+      Cover: 50/200-day moving averages, RSI, MACD, volume trends,
+      key support/resistance levels, and any chart patterns.
+      Write your analysis to technicals.md.
+      Then create the required manifest.json.
+    workspace: technicals
+
+  macro_scan:
+    name: macro_scan
+    agent: macro_analyst
+    description: >
+      Analyze the macro environment relevant to NVIDIA (NVDA).
+      Cover: AI infrastructure spending cycle, US-China chip export
+      controls, Fed rate path impact on growth stocks, semiconductor
+      cycle positioning, and competitive threats from AMD/custom silicon.
+      Write your analysis to macro.md.
+      Then create the required manifest.json.
+    workspace: macro
+
+  risk_assessment:
+    name: risk_assessment
+    agent: risk_analyst
+    description: >
+      You will receive structured outputs from three predecessor tasks
+      (fundamentals, technicals, macro_scan) via the predecessor context.
+      Synthesize into a unified risk assessment.
+      Identify where analysts agree/disagree, flag top 3 risks and
+      top 3 catalysts, and assign an overall conviction score (1-10).
+      Write your assessment to risk_assessment.md.
+      Then create the required manifest.json.
+    depends_on: [fundamentals, technicals, macro_scan]
+    workspace: synthesis
+
+  review_gate:
+    name: review_gate
+    type: approval_gate
+    depends_on: [risk_assessment]
+    prompt: >
+      Review the risk assessment before the final recommendation.
+
+  recommendation:
+    name: recommendation
+    agent: portfolio_manager
+    description: >
+      You will receive the risk assessment and all predecessor analyses
+      via the predecessor context.
+      Produce a final investment recommendation for NVDA including:
+      - Thesis (bull and bear case)
+      - Position sizing (% of portfolio)
+      - Entry price range and stop-loss
+      - 6-month and 12-month price targets
+      - Key metrics to monitor
+      Write to recommendation.md.
+      Then create the required manifest.json.
+    depends_on: [review_gate]
+    workspace: synthesis
