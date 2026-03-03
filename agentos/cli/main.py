@@ -12,9 +12,11 @@ import yaml
 from agentos.kernel.budget_manager import BudgetManager
 from agentos.kernel.dag_executor import DAGExecutor
 from agentos.kernel.event_log import SQLiteEventLog
+from agentos.kernel.gate_manager import GateManager
 from agentos.kernel.seq import SeqCounter
 from agentos.kernel.workspace import Workspace
 from agentos.schemas.budget import BudgetDelta
+from agentos.schemas.gate import GateResolution, GateType
 from agentos.schemas.task import TaskConfig, TaskStatus
 from agentos.schemas.workflow import WorkflowDefinition
 from agentos.schemas.workspace import WorkspaceConfig
@@ -23,6 +25,18 @@ from agentos.schemas.workspace import WorkspaceConfig
 @click.group()
 def cli() -> None:
     """AgentOS — governance and orchestration for autonomous AI agents."""
+
+
+# Register subcommand groups and standalone commands
+from agentos.cli.gate import gate  # noqa: E402
+from agentos.cli.status import cost, events, status  # noqa: E402
+from agentos.cli.workflow import workflow  # noqa: E402
+
+cli.add_command(workflow)
+cli.add_command(gate)
+cli.add_command(status)
+cli.add_command(events)
+cli.add_command(cost)
 
 
 @cli.command()
@@ -66,14 +80,19 @@ def demo(yaml_file: str, db: str) -> None:
     workspace = Workspace(ws_config, event_log, seq, workflow_id=workflow_id)
     workspace.ensure_root()
 
+    # --- Gate manager ---
+    gate_mgr = GateManager(event_log, seq, workflow_id)
+
     click.echo(f"  Workspace: {ws_root}")
     click.echo()
 
     # --- Stub task executor ---
     def task_executor(task_name: str, config: TaskConfig) -> TaskStatus:
         if config.type == "approval_gate":
+            gate_id = gate_mgr.create_gate(task_name, GateType.APPROVAL, config.prompt)
             click.echo(click.style(f"  GATE  {task_name}", fg="yellow") +
                        f" — {config.prompt or 'Awaiting approval'}")
+            gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="demo")
             click.echo(click.style("        ✓ auto-approved (demo mode)", fg="yellow"))
             time.sleep(0.2)
             return TaskStatus.SUCCEEDED
@@ -167,6 +186,22 @@ def demo(yaml_file: str, db: str) -> None:
                        f"{entry.path:30s} ({entry.agent_id}, {entry.size_bytes}B)")
         click.echo(f"  Root: {ws_root}")
 
+    # --- Gate summary ---
+    all_gates = gate_mgr.list_all()
+    if all_gates:
+        click.echo()
+        click.echo(click.style(" Gates", fg="cyan", bold=True))
+        click.echo(click.style("-" * 40, fg="cyan"))
+        for g in all_gates:
+            if g.pending:
+                res_str = click.style("PENDING", fg="yellow")
+            elif g.resolution == GateResolution.APPROVED:
+                res_str = click.style("APPROVED", fg="green")
+            else:
+                res_str = click.style(str(g.resolution).upper(), fg="red")
+            prompt_str = g.prompt[:50] + "..." if len(g.prompt) > 50 else g.prompt
+            click.echo(f"  {g.gate_id}  {res_str}  {prompt_str}")
+
     # --- Event log replay ---
     click.echo()
     click.echo(click.style(" Event Log", fg="cyan", bold=True))
@@ -210,6 +245,14 @@ def _event_detail(event: object) -> str:
     payload = event.payload  # type: ignore[attr-defined]
     if "path" in payload:
         return f"{payload.get('operation', '')} {payload['path']}"
+    if "gate_id" in payload:
+        parts = [payload["gate_id"]]
+        if "resolution" in payload:
+            parts.append(f"→ {payload['resolution']}")
+        elif "prompt" in payload and payload["prompt"]:
+            prompt = payload["prompt"]
+            parts.append(f'"{prompt[:40]}"')
+        return " ".join(parts)
     if "task_id" in payload:
         parts = [payload["task_id"]]
         if "to_state" in payload:
