@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
 from abc import ABC, abstractmethod
+from typing import Callable
 
 from agentos.schemas.events import EVENT_TABLE_DDL, Event, EventType
 
@@ -42,6 +44,14 @@ class EventLog(ABC):
     def last_seq(self, workflow_id: str) -> int:
         """Return the highest seq for a workflow, or -1 if none."""
 
+    @abstractmethod
+    def subscribe(self, callback: Callable[[Event], None]) -> str:
+        """Subscribe to new events. Returns subscription ID."""
+
+    @abstractmethod
+    def unsubscribe(self, subscription_id: str) -> None:
+        """Remove a subscription."""
+
 
 class SQLiteEventLog(EventLog):
     """SQLite-backed event log with WAL mode."""
@@ -52,6 +62,7 @@ class SQLiteEventLog(EventLog):
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(EVENT_TABLE_DDL)
         self._lock = threading.Lock()
+        self._subscribers: dict[str, Callable[[Event], None]] = {}
 
     def append(self, event: Event) -> None:
         with self._lock:
@@ -77,6 +88,13 @@ class SQLiteEventLog(EventLog):
                 raise ValueError(
                     f"Duplicate (workflow_id={event.workflow_id!r}, seq={event.seq})"
                 ) from exc
+
+        # Notify subscribers (outside the lock to avoid deadlocks)
+        for callback in list(self._subscribers.values()):
+            try:
+                callback(event)
+            except Exception:
+                pass  # Subscriber errors must not block event logging
 
     def query(
         self,
@@ -119,6 +137,14 @@ class SQLiteEventLog(EventLog):
         if row is None or row[0] is None:
             return -1
         return row[0]
+
+    def subscribe(self, callback: Callable[[Event], None]) -> str:
+        sub_id = str(uuid.uuid4())
+        self._subscribers[sub_id] = callback
+        return sub_id
+
+    def unsubscribe(self, subscription_id: str) -> None:
+        self._subscribers.pop(subscription_id, None)
 
     @staticmethod
     def _row_to_event(row: tuple) -> Event:
