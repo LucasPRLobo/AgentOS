@@ -4,6 +4,7 @@ import { Layout } from './components/Layout'
 import { DashboardPage } from './pages/DashboardPage'
 import { WorkflowPage } from './pages/WorkflowPage'
 import { BuilderPage } from './pages/BuilderPage'
+import { MarketplacePage } from './pages/MarketplacePage'
 
 export function App() {
   return (
@@ -13,6 +14,7 @@ export function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/workflows/:id" element={<WorkflowPage />} />
           <Route path="/builder" element={<BuilderPage />} />
+          <Route path="/marketplace" element={<MarketplacePage />} />
         </Routes>
       </Layout>
     </BrowserRouter>
