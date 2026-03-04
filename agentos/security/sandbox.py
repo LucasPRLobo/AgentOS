@@ -1,0 +1,194 @@
+"""Process isolation manager — sandbox lifecycle for agent execution."""
+
+from __future__ import annotations
+
+import subprocess
+from abc import ABC, abstractmethod
+from pathlib import Path
+
+from agentos.kernel.event_log import EventLog
+from agentos.kernel.seq import SeqCounter
+from agentos.schemas.events import Event, EventType
+from agentos.schemas.sandbox import SandboxConfig, SandboxLevel
+
+
+class SandboxHandle(ABC):
+    """Abstract handle for a running sandbox."""
+
+    @abstractmethod
+    def run(self, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        """Run a command inside the sandbox."""
+
+    @abstractmethod
+    def teardown(self) -> None:
+        """Tear down the sandbox and release resources."""
+
+    @property
+    @abstractmethod
+    def level(self) -> SandboxLevel:
+        """Return the sandbox isolation level."""
+
+
+class NoopSandbox(SandboxHandle):
+    """No isolation — direct subprocess (V1 behavior)."""
+
+    def __init__(self, workspace: Path) -> None:
+        self._workspace = workspace
+
+    def run(self, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        return subprocess.run(cmd, cwd=self._workspace, **kwargs)
+
+    def teardown(self) -> None:
+        pass
+
+    @property
+    def level(self) -> SandboxLevel:
+        return SandboxLevel.NONE
+
+
+class NamespaceSandbox(SandboxHandle):
+    """Linux namespace isolation via unshare(2)."""
+
+    def __init__(self, config: SandboxConfig, workspace: Path) -> None:
+        self._config = config
+        self._workspace = workspace
+
+    def run(self, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        unshare_flags = ["unshare", "--pid", "--mount", "--fork"]
+        if not self._config.network_enabled:
+            unshare_flags.append("--net")
+        return subprocess.run(unshare_flags + cmd, cwd=self._workspace, **kwargs)
+
+    def teardown(self) -> None:
+        pass
+
+    @property
+    def level(self) -> SandboxLevel:
+        return SandboxLevel.NAMESPACE
+
+
+class ContainerSandbox(SandboxHandle):
+    """Docker-based full isolation."""
+
+    def __init__(self, config: SandboxConfig, workspace: Path) -> None:
+        self._config = config
+        self._workspace = workspace
+        self._container_id: str | None = None
+
+    def run(self, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        docker_cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{self._workspace}:/workspace",
+            "-w",
+            "/workspace",
+        ]
+        if not self._config.network_enabled:
+            docker_cmd.extend(["--network", "none"])
+        if self._config.memory_limit_mb > 0:
+            docker_cmd.extend(["--memory", f"{self._config.memory_limit_mb}m"])
+        if self._config.cpu_limit > 0:
+            docker_cmd.extend(["--cpus", str(self._config.cpu_limit)])
+        if self._config.filesystem_readonly:
+            docker_cmd.append("--read-only")
+        docker_cmd.extend(["python:3.11-slim"] + cmd)
+        return subprocess.run(docker_cmd, **kwargs)
+
+    def teardown(self) -> None:
+        if self._container_id:
+            subprocess.run(
+                ["docker", "stop", self._container_id],
+                capture_output=True,
+            )
+
+    @property
+    def level(self) -> SandboxLevel:
+        return SandboxLevel.CONTAINER
+
+
+class SandboxManager:
+    """Manages sandbox lifecycle for agent execution.
+
+    Three isolation levels:
+    - none: Direct subprocess (V1 behavior)
+    - namespace: Linux unshare(2) — PID, mount, network namespaces
+    - container: Docker run with resource limits
+    """
+
+    def __init__(
+        self,
+        event_log: EventLog,
+        seq: SeqCounter,
+        workflow_id: str,
+    ) -> None:
+        self._event_log = event_log
+        self._seq = seq
+        self._workflow_id = workflow_id
+        self._active: dict[str, SandboxHandle] = {}
+
+    def create(
+        self, agent_id: str, config: SandboxConfig, workspace: Path,
+    ) -> SandboxHandle:
+        """Create a sandbox for an agent. Emits sandbox.created event."""
+        if config.level == SandboxLevel.NONE:
+            handle = NoopSandbox(workspace)
+        elif config.level == SandboxLevel.NAMESPACE:
+            handle = NamespaceSandbox(config, workspace)
+        elif config.level == SandboxLevel.CONTAINER:
+            handle = ContainerSandbox(config, workspace)
+        else:
+            raise ValueError(f"Unknown sandbox level: {config.level}")
+
+        self._active[agent_id] = handle
+        self._event_log.append(
+            Event(
+                event_type=EventType.SANDBOX_CREATED,
+                workflow_id=self._workflow_id,
+                seq=self._seq.next(),
+                schema_version="0.2",
+                payload={
+                    "agent_id": agent_id,
+                    "level": config.level.value,
+                    "network_enabled": config.network_enabled,
+                    "memory_limit_mb": config.memory_limit_mb,
+                    "cpu_limit": config.cpu_limit,
+                },
+            )
+        )
+        return handle
+
+    def destroy(self, agent_id: str) -> None:
+        """Tear down an agent's sandbox. Emits sandbox.destroyed event."""
+        handle = self._active.pop(agent_id, None)
+        if handle is not None:
+            handle.teardown()
+            self._event_log.append(
+                Event(
+                    event_type=EventType.SANDBOX_DESTROYED,
+                    workflow_id=self._workflow_id,
+                    seq=self._seq.next(),
+                    schema_version="0.2",
+                    payload={"agent_id": agent_id},
+                )
+            )
+
+    def get(self, agent_id: str) -> SandboxHandle | None:
+        """Get the active sandbox handle for an agent."""
+        return self._active.get(agent_id)
+
+    def report_violation(self, agent_id: str, detail: str) -> None:
+        """Report a sandbox violation. Emits sandbox.violation event."""
+        self._event_log.append(
+            Event(
+                event_type=EventType.SANDBOX_VIOLATION,
+                workflow_id=self._workflow_id,
+                seq=self._seq.next(),
+                schema_version="0.2",
+                payload={
+                    "agent_id": agent_id,
+                    "detail": detail,
+                },
+            )
+        )

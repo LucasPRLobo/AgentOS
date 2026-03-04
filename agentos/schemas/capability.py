@@ -6,6 +6,8 @@ from fnmatch import fnmatch
 
 from pydantic import BaseModel, Field
 
+from agentos.schemas.sandbox import SandboxLevel
+
 
 class CapabilityGrant(BaseModel):
     """A single capability granted to an agent.
@@ -80,6 +82,10 @@ class CapabilityPolicy(BaseModel):
     deny_by_default: bool = Field(
         default=True,
         description="Deny anything not explicitly granted",
+    )
+    sandbox: SandboxLevel = Field(
+        default=SandboxLevel.NONE,
+        description="Required sandbox isolation level for this agent",
     )
 
     def has_tool(self, tool_name: str) -> bool:
