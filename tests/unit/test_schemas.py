@@ -25,7 +25,7 @@ from agentos.schemas.task import (
 
 class TestTaskStatus:
     def test_all_values(self):
-        assert set(TaskStatus) == {"pending", "running", "succeeded", "failed", "waiting"}
+        assert set(TaskStatus) == {"pending", "running", "succeeded", "failed", "waiting", "skipped"}
 
     def test_string_comparison(self):
         assert TaskStatus.PENDING == "pending"
@@ -243,7 +243,7 @@ class TestTaskOutputDefaults:
 
 class TestEventType:
     def test_count(self):
-        assert len(EventType) == 15
+        assert len(EventType) == 40
 
     def test_all_dotted_format(self):
         for et in EventType:

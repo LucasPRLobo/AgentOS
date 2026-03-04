@@ -49,6 +49,51 @@ class EventType(StrEnum):
     CAPABILITY_GRANTED = "capability.granted"
     CAPABILITY_DENIED = "capability.denied"
 
+    # Collaborative workflows (V1.5)
+    BRANCH_EVALUATED = "branch.evaluated"
+    TASK_RETRIED = "task.retried"
+    REVISION_FEEDBACK = "revision.feedback"
+    MESSAGE_SENT = "message.sent"
+    MESSAGE_RECEIVED = "message.received"
+
+    # Channels (V2)
+    CHANNEL_CREATED = "channel.created"
+    CHANNEL_CLOSED = "channel.closed"
+
+    # Sandbox (V2)
+    SANDBOX_CREATED = "sandbox.created"
+    SANDBOX_DESTROYED = "sandbox.destroyed"
+    SANDBOX_VIOLATION = "sandbox.violation"
+
+    # Safety (V2)
+    SAFETY_SCORE_CALCULATED = "safety.score_calculated"
+
+    # Policy (V2)
+    POLICY_VIOLATION_DETECTED = "policy.violation_detected"
+    POLICY_RELOADED = "policy.reloaded"
+
+    # Auth (V2)
+    AUTH_LOGIN = "auth.login"
+    AUTH_LOGOUT = "auth.logout"
+
+    # Memory (V2)
+    MEMORY_EXTRACTED = "memory.extracted"
+    MEMORY_INJECTED = "memory.injected"
+
+    # Benchmark (V2+)
+    BENCHMARK_STARTED = "benchmark.started"
+    BENCHMARK_COMPLETED = "benchmark.completed"
+
+    # Dynamic DAG (V3)
+    TASK_ADDED = "task.added"
+    TASK_WIRED = "task.wired"
+    AGENT_SPAWN_REQUESTED = "agent.spawn_requested"
+    AGENT_SPAWN_APPROVED = "agent.spawn_approved"
+
+    # Knowledge (V3)
+    KNOWLEDGE_ENTITY_ADDED = "knowledge.entity_added"
+    KNOWLEDGE_RELATIONSHIP_ADDED = "knowledge.relationship_added"
+
     # Errors
     ERROR_OCCURRED = "error.occurred"
 

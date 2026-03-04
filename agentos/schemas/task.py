@@ -8,16 +8,36 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 
+class EdgeCondition(BaseModel):
+    """Conditional outgoing edge — evaluated against predecessor output."""
+
+    target: str = Field(description="Task name to conditionally activate")
+    expression: str = Field(description="Python expression evaluated against task output")
+
+
+class RetryPolicy(BaseModel):
+    """Revision loop configuration for a task."""
+
+    max_retries: int = Field(default=2, ge=1, le=10)
+    on: str = Field(default="gate_rejected", description="gate_rejected | validation_failed")
+
+
 class TaskConfig(BaseModel):
     """A single task (node) in the workflow DAG."""
 
     name: str
     agent: str | None = None
-    type: str = "agent_task"  # agent_task | approval_gate | input_gate
+    type: str = "agent_task"  # agent_task | approval_gate | input_gate | consultation
     description: str = ""
     depends_on: list[str] = Field(default_factory=list)
     workspace: str = "shared"
     prompt: str = ""  # Gate prompt for approval/input gates
+    conditions: list[EdgeCondition] = Field(default_factory=list)
+    retry_policy: RetryPolicy | None = None
+    consult_agent: str | None = None
+    consult_question: str | None = None
+    publishes_to: list[str] = Field(default_factory=list, description="Channels this task publishes to")
+    subscribes_to: list[str] = Field(default_factory=list, description="Channels this task subscribes to")
 
 
 class TaskStatus(StrEnum):
@@ -26,6 +46,7 @@ class TaskStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     WAITING = "waiting"  # Blocked on gate or input
+    SKIPPED = "skipped"  # Conditionally deactivated
 
 
 class Confidence(StrEnum):
@@ -80,4 +101,6 @@ class TaskOutput(BaseModel):
         description="Unresolved questions for downstream agents or human review",
     )
     metrics: TaskMetrics | None = None
+    iteration: int = Field(default=1, description="Retry iteration count")
+    revision_feedback: str | None = Field(default=None, description="Feedback from reviewer on retry")
     timestamp: datetime = Field(default_factory=lambda: datetime.now())
