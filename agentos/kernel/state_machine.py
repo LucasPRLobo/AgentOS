@@ -8,11 +8,12 @@ from agentos.schemas.events import Event, EventType
 from agentos.schemas.task import TaskStatus
 
 VALID_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
-    TaskStatus.PENDING: {TaskStatus.RUNNING},
+    TaskStatus.PENDING: {TaskStatus.RUNNING, TaskStatus.SKIPPED},
     TaskStatus.RUNNING: {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.WAITING},
     TaskStatus.WAITING: {TaskStatus.RUNNING},
-    TaskStatus.SUCCEEDED: set(),
-    TaskStatus.FAILED: set(),
+    TaskStatus.SUCCEEDED: {TaskStatus.PENDING},  # allows retry (revision loops)
+    TaskStatus.FAILED: {TaskStatus.PENDING},      # allows retry (revision loops)
+    TaskStatus.SKIPPED: set(),                     # terminal
 }
 
 

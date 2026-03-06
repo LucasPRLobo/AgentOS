@@ -66,6 +66,10 @@ class WorkflowVerifier:
         self._check_gate_agents(workflow, warnings)
         self._check_agent_tasks_have_agents(workflow, errors)
         self._check_empty_workflow(workflow, warnings)
+        self._check_conditions(workflow, task_names, errors)
+        self._check_consultation_tasks(workflow, agent_names, errors)
+        self._check_retry_policies(workflow, warnings)
+        self._check_teams(workflow, agent_names, errors, warnings)
 
         report = VerificationReport(
             valid=len(errors) == 0,
@@ -260,3 +264,192 @@ class WorkflowVerifier:
                 code="empty_workflow",
                 message="Workflow has no tasks defined",
             ))
+
+    def _check_conditions(
+        self,
+        workflow: WorkflowDefinition,
+        task_names: set[str],
+        errors: list[VerificationIssue],
+    ) -> None:
+        for name, config in workflow.tasks.items():
+            for cond in config.conditions:
+                if cond.target not in task_names:
+                    errors.append(VerificationIssue(
+                        severity=Severity.ERROR,
+                        code="condition_target_missing",
+                        message=(
+                            f"Task {name!r} has condition targeting {cond.target!r}, "
+                            f"which does not exist"
+                        ),
+                        task=name,
+                    ))
+                if not cond.expression.strip():
+                    errors.append(VerificationIssue(
+                        severity=Severity.ERROR,
+                        code="condition_empty_expression",
+                        message=f"Task {name!r} has condition with empty expression",
+                        task=name,
+                    ))
+
+    def _check_consultation_tasks(
+        self,
+        workflow: WorkflowDefinition,
+        agent_names: set[str],
+        errors: list[VerificationIssue],
+    ) -> None:
+        for name, config in workflow.tasks.items():
+            if config.type != "consultation":
+                continue
+            if not config.consult_agent:
+                errors.append(VerificationIssue(
+                    severity=Severity.ERROR,
+                    code="consultation_no_agent",
+                    message=f"Consultation task {name!r} has no consult_agent specified",
+                    task=name,
+                ))
+            elif config.consult_agent not in agent_names:
+                errors.append(VerificationIssue(
+                    severity=Severity.ERROR,
+                    code="consultation_undefined_agent",
+                    message=(
+                        f"Consultation task {name!r} references agent "
+                        f"{config.consult_agent!r}, which is not defined"
+                    ),
+                    task=name,
+                ))
+            if not config.consult_question:
+                errors.append(VerificationIssue(
+                    severity=Severity.ERROR,
+                    code="consultation_no_question",
+                    message=f"Consultation task {name!r} has no consult_question specified",
+                    task=name,
+                ))
+
+    def _check_retry_policies(
+        self,
+        workflow: WorkflowDefinition,
+        warnings: list[VerificationIssue],
+    ) -> None:
+        for name, config in workflow.tasks.items():
+            if config.retry_policy is None:
+                continue
+            if config.retry_policy.on not in ("gate_rejected", "validation_failed"):
+                warnings.append(VerificationIssue(
+                    severity=Severity.WARNING,
+                    code="retry_unknown_trigger",
+                    message=(
+                        f"Task {name!r} has retry_policy with unknown trigger "
+                        f"{config.retry_policy.on!r}"
+                    ),
+                    task=name,
+                ))
+
+    def _check_teams(
+        self,
+        workflow: WorkflowDefinition,
+        agent_names: set[str],
+        errors: list[VerificationIssue],
+        warnings: list[VerificationIssue],
+    ) -> None:
+        """Validate team configurations."""
+        if not workflow.teams:
+            return
+
+        seen_agents: dict[str, str] = {}  # agent_name → team_name
+
+        for team_name, team_cfg in workflow.teams.items():
+            # Manager must exist in agents section
+            if team_cfg.manager not in agent_names:
+                errors.append(VerificationIssue(
+                    severity=Severity.ERROR,
+                    code="team_manager_undefined",
+                    message=(
+                        f"Team {team_name!r}: manager {team_cfg.manager!r} "
+                        f"is not defined in agents section"
+                    ),
+                    agent=team_cfg.manager,
+                ))
+
+            # All members must exist in agents section
+            for member in team_cfg.members:
+                if member not in agent_names:
+                    errors.append(VerificationIssue(
+                        severity=Severity.ERROR,
+                        code="team_member_undefined",
+                        message=(
+                            f"Team {team_name!r}: member {member!r} "
+                            f"is not defined in agents section"
+                        ),
+                        agent=member,
+                    ))
+
+            # Manager should not also be a member
+            if team_cfg.manager in team_cfg.members:
+                errors.append(VerificationIssue(
+                    severity=Severity.ERROR,
+                    code="team_manager_is_member",
+                    message=(
+                        f"Team {team_name!r}: manager {team_cfg.manager!r} "
+                        f"should not also be listed as a member"
+                    ),
+                    agent=team_cfg.manager,
+                ))
+
+            # No agent in multiple teams
+            all_team_agents = [team_cfg.manager] + team_cfg.members
+            for agent_name in all_team_agents:
+                if agent_name in seen_agents:
+                    errors.append(VerificationIssue(
+                        severity=Severity.ERROR,
+                        code="agent_in_multiple_teams",
+                        message=(
+                            f"Agent {agent_name!r} is in team {team_name!r} "
+                            f"but already belongs to team {seen_agents[agent_name]!r}"
+                        ),
+                        agent=agent_name,
+                    ))
+                else:
+                    seen_agents[agent_name] = team_name
+
+            # Warn if human_input is true but no input_gate task depends on manager tasks
+            if team_cfg.human_input:
+                manager_tasks = {
+                    t_name for t_name, t_cfg in workflow.tasks.items()
+                    if t_cfg.agent == team_cfg.manager
+                }
+                has_input_gate = any(
+                    t_cfg.type == "input_gate"
+                    and any(dep in manager_tasks for dep in t_cfg.depends_on)
+                    for t_cfg in workflow.tasks.values()
+                )
+                if not has_input_gate and manager_tasks:
+                    warnings.append(VerificationIssue(
+                        severity=Severity.WARNING,
+                        code="team_human_input_no_gate",
+                        message=(
+                            f"Team {team_name!r} has human_input=true but no "
+                            f"input_gate task depends on manager tasks"
+                        ),
+                    ))
+
+            # Warn if team budget exceeds workflow budget
+            wf_budget = workflow.budget
+            tb = team_cfg.budget
+            if wf_budget.max_cost_usd and tb.max_cost_usd and tb.max_cost_usd > wf_budget.max_cost_usd:
+                warnings.append(VerificationIssue(
+                    severity=Severity.WARNING,
+                    code="team_budget_exceeds_workflow",
+                    message=(
+                        f"Team {team_name!r} cost budget (${tb.max_cost_usd:.2f}) "
+                        f"exceeds workflow total (${wf_budget.max_cost_usd:.2f})"
+                    ),
+                ))
+            if wf_budget.max_tokens and tb.max_tokens and tb.max_tokens > wf_budget.max_tokens:
+                warnings.append(VerificationIssue(
+                    severity=Severity.WARNING,
+                    code="team_budget_exceeds_workflow",
+                    message=(
+                        f"Team {team_name!r} token budget ({tb.max_tokens:,}) "
+                        f"exceeds workflow total ({wf_budget.max_tokens:,})"
+                    ),
+                ))

@@ -41,8 +41,12 @@ class TestNoViolations:
         assert file_path in result.files_allowed
 
 
-class TestUnauthorizedPath:
-    def test_unauthorized_path_detected(self, verifier, tmp_path):
+class TestWorkspaceFilesImplicitlyAllowed:
+    """Files inside the task workspace are implicitly authorized — agents
+    are expected to read/write manifests, context files, and team results
+    in their own workspace without needing explicit path grants."""
+
+    def test_workspace_file_allowed_without_grant(self, verifier, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         policy = CapabilityPolicy(agent_id="a1", deny_by_default=True)
@@ -50,13 +54,11 @@ class TestUnauthorizedPath:
         pre = {}
         post = {file_path: 1000.0}
         result = verifier.verify("a1", policy, workspace, pre, post)
-        assert not result.passed
-        assert len(result.violations) == 1
-        assert result.violations[0].violation_type == "path"
-        assert result.violations[0].severity == "error"
-        assert file_path in result.files_unauthorized
+        assert result.passed
+        assert file_path in result.files_allowed
+        assert len(result.violations) == 0
 
-    def test_multiple_violations(self, verifier, tmp_path):
+    def test_multiple_workspace_files_all_allowed(self, verifier, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         policy = CapabilityPolicy(agent_id="a1", deny_by_default=True)
@@ -67,8 +69,24 @@ class TestUnauthorizedPath:
             str(workspace.resolve() / "c.txt"): 1000.0,
         }
         result = verifier.verify("a1", policy, workspace, pre, post)
-        assert len(result.violations) == 3
-        assert len(result.files_unauthorized) == 3
+        assert result.passed
+        assert len(result.files_allowed) == 3
+        assert len(result.violations) == 0
+
+    def test_workspace_subdirs_allowed(self, verifier, tmp_path):
+        """Subdirectories like .agentos_context/ and .team_results/ are allowed."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        policy = CapabilityPolicy(agent_id="a1", deny_by_default=True)
+        pre = {}
+        post = {
+            str(workspace.resolve() / ".agentos_context" / "pred.json"): 1000.0,
+            str(workspace.resolve() / ".team_results" / "member.json"): 1000.0,
+            str(workspace.resolve() / "manifest.json"): 1000.0,
+        }
+        result = verifier.verify("a1", policy, workspace, pre, post)
+        assert result.passed
+        assert len(result.files_allowed) == 3
 
 
 class TestWorkspaceEscape:
@@ -86,18 +104,18 @@ class TestWorkspaceEscape:
 
 
 class TestViolationEvents:
-    def test_violation_events_emitted(self, verifier, event_log, tmp_path):
+    def test_escape_violation_events_emitted(self, verifier, event_log, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         policy = CapabilityPolicy(agent_id="a1", deny_by_default=True)
-        file_path = str(workspace.resolve() / "file.txt")
+        outside_file = str((tmp_path / "outside.txt").resolve())
         pre = {}
-        post = {file_path: 1000.0}
+        post = {outside_file: 1000.0}
         verifier.verify("a1", policy, workspace, pre, post)
         events = event_log.query(event_type=EventType.POLICY_VIOLATION_DETECTED)
         assert len(events) == 1
         assert events[0].payload["agent_id"] == "a1"
-        assert events[0].payload["violation_type"] == "path"
+        assert events[0].payload["violation_type"] == "workspace_escape"
         assert events[0].schema_version == "0.2"
 
     def test_no_events_on_clean_run(self, verifier, event_log, tmp_path):
@@ -107,17 +125,19 @@ class TestViolationEvents:
         events = event_log.query(event_type=EventType.POLICY_VIOLATION_DETECTED)
         assert len(events) == 0
 
-
-class TestSeverityClassification:
-    def test_path_violation_is_error(self, verifier, tmp_path):
+    def test_no_events_for_workspace_files(self, verifier, event_log, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         policy = CapabilityPolicy(agent_id="a1", deny_by_default=True)
+        file_path = str(workspace.resolve() / "file.txt")
         pre = {}
-        post = {str(workspace.resolve() / "file.txt"): 1000.0}
-        result = verifier.verify("a1", policy, workspace, pre, post)
-        assert result.violations[0].severity == "error"
+        post = {file_path: 1000.0}
+        verifier.verify("a1", policy, workspace, pre, post)
+        events = event_log.query(event_type=EventType.POLICY_VIOLATION_DETECTED)
+        assert len(events) == 0
 
+
+class TestSeverityClassification:
     def test_escape_violation_is_critical(self, verifier, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -125,6 +145,16 @@ class TestSeverityClassification:
         policy = CapabilityPolicy(agent_id="a1")
         result = verifier.verify("a1", policy, workspace, {}, {outside: 1000.0})
         assert result.violations[0].severity == "critical"
+
+    def test_workspace_file_no_violation(self, verifier, tmp_path):
+        """Files inside workspace produce no violations regardless of policy."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        policy = CapabilityPolicy(agent_id="a1", deny_by_default=True)
+        pre = {}
+        post = {str(workspace.resolve() / "file.txt"): 1000.0}
+        result = verifier.verify("a1", policy, workspace, pre, post)
+        assert result.passed
 
 
 class TestSnapshotDirectory:
@@ -154,6 +184,8 @@ class TestModifiedFileDetection:
         post = {file_path: 2000.0}  # Different mtime = modified
         result = verifier.verify("a1", policy, workspace, pre, post)
         assert file_path in result.files_touched
+        # Workspace files are implicitly allowed, no violations
+        assert result.passed
 
     def test_unchanged_file_ignored(self, verifier, tmp_path):
         workspace = tmp_path / "workspace"

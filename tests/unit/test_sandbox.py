@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -32,17 +33,42 @@ class TestSandboxLevels:
         assert isinstance(handle, NoopSandbox)
         assert handle.level == SandboxLevel.NONE
 
-    def test_sandbox_namespace_creates_namespace(self, sandbox_manager, tmp_path):
+    def test_sandbox_namespace_with_root(self, sandbox_manager, tmp_path):
+        """When unshare is available, creates NamespaceSandbox."""
         config = SandboxConfig(level=SandboxLevel.NAMESPACE)
-        handle = sandbox_manager.create("agent-1", config, tmp_path)
+        with patch("agentos.security.sandbox.subprocess.run") as mock_run:
+            # Simulate unshare test succeeding
+            mock_run.return_value = subprocess.CompletedProcess([], 0)
+            handle = sandbox_manager.create("agent-1", config, tmp_path)
         assert isinstance(handle, NamespaceSandbox)
         assert handle.level == SandboxLevel.NAMESPACE
 
-    def test_sandbox_container_creates_container(self, sandbox_manager, tmp_path):
+    def test_sandbox_namespace_falls_back_without_root(self, sandbox_manager, tmp_path):
+        """When unshare is unavailable, falls back to NoopSandbox."""
+        config = SandboxConfig(level=SandboxLevel.NAMESPACE)
+        with patch("agentos.security.sandbox.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 1)
+            handle = sandbox_manager.create("agent-1", config, tmp_path)
+        assert isinstance(handle, NoopSandbox)
+        assert handle.level == SandboxLevel.NONE
+
+    def test_sandbox_container_with_docker(self, sandbox_manager, tmp_path):
+        """When Docker is available, creates ContainerSandbox."""
         config = SandboxConfig(level=SandboxLevel.CONTAINER)
-        handle = sandbox_manager.create("agent-1", config, tmp_path)
+        with patch("agentos.security.sandbox.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0)
+            handle = sandbox_manager.create("agent-1", config, tmp_path)
         assert isinstance(handle, ContainerSandbox)
         assert handle.level == SandboxLevel.CONTAINER
+
+    def test_sandbox_container_falls_back_without_docker(self, sandbox_manager, tmp_path):
+        """When Docker is unavailable, falls back to NoopSandbox."""
+        config = SandboxConfig(level=SandboxLevel.CONTAINER)
+        with patch("agentos.security.sandbox.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 1)
+            handle = sandbox_manager.create("agent-1", config, tmp_path)
+        assert isinstance(handle, NoopSandbox)
+        assert handle.level == SandboxLevel.NONE
 
 
 class TestSandboxEvents:
@@ -52,15 +78,29 @@ class TestSandboxEvents:
             network_enabled=False,
             memory_limit_mb=512,
         )
-        sandbox_manager.create("agent-1", config, tmp_path)
+        with patch("agentos.security.sandbox.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0)
+            sandbox_manager.create("agent-1", config, tmp_path)
         events = event_log.query(event_type=EventType.SANDBOX_CREATED)
         assert len(events) == 1
         payload = events[0].payload
         assert payload["agent_id"] == "agent-1"
         assert payload["level"] == "namespace"
+        assert payload["requested_level"] == "namespace"
         assert payload["network_enabled"] is False
         assert payload["memory_limit_mb"] == 512
         assert events[0].schema_version == "0.2"
+
+    def test_creation_event_records_fallback(self, sandbox_manager, event_log, tmp_path):
+        config = SandboxConfig(level=SandboxLevel.NAMESPACE)
+        with patch("agentos.security.sandbox.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 1)
+            sandbox_manager.create("agent-1", config, tmp_path)
+        events = event_log.query(event_type=EventType.SANDBOX_CREATED)
+        assert len(events) == 1
+        payload = events[0].payload
+        assert payload["level"] == "none"
+        assert payload["requested_level"] == "namespace"
 
     def test_destruction_event(self, sandbox_manager, event_log, tmp_path):
         config = SandboxConfig(level=SandboxLevel.NONE)

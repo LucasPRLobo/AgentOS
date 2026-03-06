@@ -38,12 +38,16 @@ class BudgetManager:
         seq: SeqCounter,
         workflow_id: str,
         agent_specs: dict[str, BudgetSpec] | None = None,
+        team_specs: dict[str, BudgetSpec] | None = None,
+        agent_teams: dict[str, str] | None = None,
     ) -> None:
         self._workflow_spec = workflow_spec
         self._event_log = event_log
         self._seq = seq
         self._workflow_id = workflow_id
         self._agent_specs: dict[str, BudgetSpec] = agent_specs or {}
+        self._team_specs: dict[str, BudgetSpec] = team_specs or {}
+        self._agent_teams: dict[str, str] = agent_teams or {}
         self._usage: dict[str, BudgetUsage] = defaultdict(BudgetUsage)
 
     def apply(self, agent_id: str, delta: BudgetDelta) -> None:
@@ -68,7 +72,7 @@ class BudgetManager:
         self.check(agent_id)
 
     def check(self, agent_id: str) -> None:
-        """Check agent-level and workflow-level limits.
+        """Check agent-level, team-level, and workflow-level limits.
 
         Raises BudgetExceededError and emits BUDGET_EXCEEDED event if any
         limit is breached.
@@ -79,6 +83,14 @@ class BudgetManager:
         agent_spec = self._agent_specs.get(agent_id)
         if agent_spec is not None:
             self._check_spec(agent_id, agent_spec, usage)
+
+        # Team-level limits
+        team_name = self._agent_teams.get(agent_id)
+        if team_name and team_name in self._team_specs:
+            team_usage = self.team_usage(team_name)
+            self._check_spec(
+                f"team:{team_name}", self._team_specs[team_name], team_usage,
+            )
 
         # Workflow-level limits
         total = self.total_usage
@@ -109,6 +121,18 @@ class BudgetManager:
     def usage_for(self, agent_id: str) -> BudgetUsage:
         """Return accumulated usage for a specific agent."""
         return self._usage[agent_id]
+
+    def team_usage(self, team_name: str) -> BudgetUsage:
+        """Return aggregate usage across all agents in a team."""
+        total = BudgetUsage()
+        for agent_id, t_name in self._agent_teams.items():
+            if t_name == team_name and agent_id in self._usage:
+                usage = self._usage[agent_id]
+                total.tokens_used += usage.tokens_used
+                total.api_calls_made += usage.api_calls_made
+                total.time_elapsed_seconds += usage.time_elapsed_seconds
+                total.cost_usd += usage.cost_usd
+        return total
 
     @property
     def total_usage(self) -> BudgetUsage:

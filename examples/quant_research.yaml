@@ -1,0 +1,270 @@
+# Quantitative Research Pipeline — code-executing demo workflow
+#
+# 9 tasks, 7 agents, 1 team. Agents write and RUN Python code:
+# data fetching, Monte Carlo simulations, chart generation, automated
+# code review. Demonstrates: shell_exec, computed artifacts, manager
+# delegation, parallel execution, approval gates.
+#
+# Prerequisites:
+#   pip install yfinance pandas numpy matplotlib
+#
+# Usage:
+#   agentos workflow run examples/quant_research.yaml                       # stub
+#   agentos workflow run examples/quant_research.yaml --live --interactive  # real
+
+name: quant_research_pipeline
+version: "1.0"
+
+budget:
+  max_tokens: 600000
+  max_cost_usd: 10.00
+  max_time_seconds: 2400
+
+agents:
+  data_engineer:
+    adapter: tier2_claude_code
+    role: >
+      Quantitative data engineer. You write and execute Python scripts to
+      fetch market data using yfinance, clean it, compute basic metrics
+      (returns, volatility, moving averages), and save structured CSVs.
+      Always run your code with Bash to verify it works.
+    tools: [shell_exec, file_read, file_write, web_search]
+    budget:
+      max_time_seconds: 300
+
+  quant_modeler:
+    adapter: tier2_claude_code
+    role: >
+      Quantitative analyst. You write and execute Python code for financial
+      modeling: Monte Carlo price simulations, DCF valuation, statistical
+      analysis (Sharpe ratio, beta, VaR). Read the data CSVs produced by
+      the data engineer, run your models, and save numerical results as
+      JSON. Always execute your code to produce actual computed outputs.
+    tools: [shell_exec, file_read, file_write]
+    budget:
+      max_time_seconds: 300
+
+  chart_builder:
+    adapter: tier2_claude_code
+    role: >
+      Data visualization specialist. You write and execute Python scripts
+      using matplotlib to generate publication-quality charts: price history
+      with moving averages, volatility cones, Monte Carlo fan charts,
+      valuation sensitivity tables. Save charts as PNG files. Always run
+      your code to produce the actual image files.
+    tools: [shell_exec, file_read, file_write]
+    budget:
+      max_time_seconds: 300
+
+  code_reviewer:
+    adapter: tier2_claude_code
+    role: >
+      Code quality auditor. You review Python scripts written by other
+      agents for correctness, edge cases, and methodology flaws. You run
+      the code yourself to verify outputs, check for numerical errors,
+      and validate that results are reasonable. Flag any issues found.
+    tools: [shell_exec, file_read, file_write]
+    budget:
+      max_time_seconds: 300
+
+  # ── Research team ─────────────────────────────────────
+  research_director:
+    adapter: tier2_claude_code
+    role: >
+      Senior research director. You manage the final synthesis of
+      quantitative research into an actionable investment memo.
+      Delegate risk analysis and final formatting to your team,
+      review their work, and produce the consolidated recommendation.
+    tools: [file_read, file_write]
+    budget:
+      max_time_seconds: 300
+
+  risk_analyst:
+    adapter: tier2_claude_code
+    role: >
+      Risk analyst. You read quantitative model outputs (VaR, Monte Carlo
+      results, volatility metrics) and code review findings to produce a
+      structured risk assessment with position sizing recommendations.
+    tools: [file_read, file_write]
+    budget:
+      max_time_seconds: 300
+
+  memo_writer:
+    adapter: tier2_claude_code
+    role: >
+      Investment memo writer. You synthesize quantitative research, charts,
+      risk analysis, and code review findings into a polished, structured
+      investment memo suitable for a portfolio committee.
+    tools: [file_read, file_write]
+    budget:
+      max_time_seconds: 300
+
+teams:
+  research_team:
+    manager: research_director
+    members: [risk_analyst, memo_writer]
+    description: >
+      Final synthesis team. The research director delegates risk assessment
+      and memo writing, reviews quality, and produces the consolidated
+      investment recommendation with position sizing.
+
+tasks:
+  # ── Human provides the brief ──────────────────────────
+  investment_brief:
+    name: investment_brief
+    type: input_gate
+    prompt: |
+      Provide the investment research parameters:
+        - Ticker symbol (e.g., AAPL, TSLA, NVDA, MSFT)
+        - Analysis period (e.g., "1 year", "6 months", "2 years")
+        - Investment thesis to test (e.g., "undervalued relative to peers",
+          "momentum play", "mean reversion candidate")
+        - Portfolio constraints (e.g., "max 5% position, $10M portfolio")
+
+  # ── Fetch and prepare market data ─────────────────────
+  data_collection:
+    name: data_collection
+    type: agent_task
+    agent: data_engineer
+    depends_on: [investment_brief]
+    workspace: shared
+    description: |
+      Write and execute a Python script to:
+      1. Install yfinance if needed: pip install yfinance pandas numpy
+      2. Fetch historical price data for the ticker specified in the brief
+      3. Compute: daily returns, 20/50/200-day moving averages, rolling
+         30-day volatility, cumulative returns
+      4. Fetch basic fundamentals (P/E, market cap, revenue) if available
+      5. Save the cleaned data as data/price_history.csv
+      6. Save computed metrics as data/metrics.json
+      7. Save fundamentals as data/fundamentals.json
+
+      Run your code and verify the CSV and JSON files are written correctly.
+      Print a summary of the data (date range, row count, key stats).
+
+  # ── Parallel: quant modeling + chart generation ───────
+  quant_modeling:
+    name: quant_modeling
+    type: agent_task
+    agent: quant_modeler
+    depends_on: [data_collection]
+    workspace: shared
+    description: |
+      Read the data files from data_collection (data/price_history.csv,
+      data/metrics.json, data/fundamentals.json). Write and execute
+      Python scripts to:
+
+      1. Monte Carlo simulation: 10,000 paths, 252 trading days forward.
+         Save results as models/monte_carlo.json with:
+         - median_price, p5_price, p95_price (5th/95th percentile)
+         - probability_above_current, probability_below_20pct
+      2. DCF valuation (if fundamentals available): simple 5-year DCF
+         with 3 discount rate scenarios (8%, 10%, 12%).
+         Save as models/dcf_valuation.json
+      3. Statistical profile: Sharpe ratio, annualized volatility, beta
+         vs SPY, max drawdown, Value-at-Risk (95% and 99%).
+         Save as models/risk_stats.json
+
+      Execute ALL scripts and verify outputs exist. Print key numbers.
+
+  chart_generation:
+    name: chart_generation
+    type: agent_task
+    agent: chart_builder
+    depends_on: [data_collection]
+    workspace: shared
+    description: |
+      Read the data from data_collection (data/price_history.csv,
+      data/metrics.json). Write and execute Python scripts using
+      matplotlib to generate:
+
+      1. charts/price_history.png — Price with 20/50/200 MA overlays
+      2. charts/returns_distribution.png — Histogram of daily returns
+         with normal distribution overlay and VaR lines
+      3. charts/volatility.png — Rolling 30-day volatility over time
+
+      Use a clean, professional style (dark background or seaborn style).
+      Execute the code and verify PNG files are created.
+      Print file sizes to confirm they're non-empty.
+
+  # ── Code review: verify the quant model ───────────────
+  code_audit:
+    name: code_audit
+    type: agent_task
+    agent: code_reviewer
+    depends_on: [quant_modeling]
+    workspace: shared
+    description: |
+      Review and test the quantitative models:
+
+      1. Read all Python scripts in the workspace
+      2. Re-run the Monte Carlo simulation and verify:
+         - Output JSON exists and has expected fields
+         - Simulated prices are positive (no negative prices)
+         - Percentiles are ordered correctly (p5 < median < p95)
+         - Number of simulations matches expected count
+      3. Check the risk statistics:
+         - Sharpe ratio is reasonable (-2 to 5 range)
+         - VaR is negative (it's a loss measure)
+         - Volatility is positive
+      4. If DCF exists, verify discount rates produce ordered valuations
+
+      Write a code_review_report.md with:
+      - PASS/FAIL for each check
+      - Any numerical anomalies found
+      - Code quality observations
+
+  # ── Human reviews computed outputs ────────────────────
+  analysis_review:
+    name: analysis_review
+    type: approval_gate
+    depends_on: [code_audit, chart_generation]
+    prompt: >
+      Quantitative analysis and code review complete. Check the workspace
+      for model outputs (models/), charts (charts/), and the code review
+      report. Approve to proceed to final synthesis.
+
+  # ── Manager-led final synthesis ───────────────────────
+  investment_synthesis:
+    name: investment_synthesis
+    type: agent_task
+    agent: research_director
+    depends_on: [analysis_review]
+    workspace: shared
+    description: |
+      All quantitative research is complete. As research director,
+      manage your team to produce the final investment recommendation:
+
+      1. Assign risk_analyst to read the model outputs (models/*.json)
+         and code review report, then write a risk assessment with:
+         - Overall risk rating (LOW / MODERATE / HIGH / EXTREME)
+         - Key risk factors with quantified metrics
+         - Suggested position size based on VaR and portfolio constraints
+         - Stop-loss recommendation based on max drawdown
+
+      2. Assign memo_writer to read all outputs and produce a structured
+         investment_memo.md with sections:
+         - RECOMMENDATION (BUY / HOLD / SELL with conviction level)
+         - THESIS SUMMARY
+         - QUANTITATIVE EVIDENCE (key numbers from the models)
+         - RISK ASSESSMENT (from the risk analyst)
+         - CHARTS REFERENCE (list generated chart files)
+         - POSITION SIZING
+         - DISCLAIMER
+
+      3. Review both outputs for consistency and quality.
+         Consolidate into the final recommendation.
+
+  # ── Final sign-off ────────────────────────────────────
+  final_approval:
+    name: final_approval
+    type: approval_gate
+    depends_on: [investment_synthesis]
+    prompt: >
+      Review the final investment memo and risk assessment.
+      Approve the recommendation or reject with feedback.
+
+channels:
+  research_feed:
+    name: research_feed
+    mode: broadcast

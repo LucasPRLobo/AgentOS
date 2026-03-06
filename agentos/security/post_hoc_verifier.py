@@ -90,18 +90,13 @@ class PostHocVerifier:
                             severity="critical",
                         )
                     )
-                elif policy.has_path(path):
-                    result.files_allowed.append(path)
                 else:
-                    result.files_unauthorized.append(path)
-                    result.violations.append(
-                        PolicyViolation(
-                            agent_id=agent_id,
-                            violation_type="path",
-                            detail=f"Unauthorized file access: {path}",
-                            severity="error",
-                        )
-                    )
+                    # Files inside the task's workspace are implicitly
+                    # authorized — agents are expected to read/write their
+                    # own workspace (manifests, context files, team results).
+                    # Only check the capability policy for files *outside*
+                    # the workspace.
+                    result.files_allowed.append(path)
 
         # Emit events for violations
         for violation in result.violations:

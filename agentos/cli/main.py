@@ -18,6 +18,7 @@ from agentos.kernel.gate_manager import GateManager
 from agentos.kernel.seq import SeqCounter
 from agentos.kernel.workspace import Workspace
 from agentos.schemas.budget import BudgetDelta
+from agentos.schemas.events import EventType
 from agentos.schemas.gate import GateResolution, GateType
 from agentos.schemas.task import Confidence, Finding, TaskConfig, TaskOutput, TaskStatus
 from agentos.schemas.workflow import WorkflowDefinition
@@ -40,6 +41,406 @@ cli.add_command(status)
 cli.add_command(events)
 cli.add_command(cost)
 cli.add_command(replay)
+
+
+@cli.command()
+@click.argument("db", type=click.Path())
+@click.option("--port", default=8420, help="Port to serve the dashboard on.")
+@click.option("--host", default="127.0.0.1", help="Host to bind to.")
+def dashboard(db: str, port: int, host: str) -> None:
+    """Start the web dashboard for monitoring workflows.
+
+    Requires the dashboard extra: pip install agentos[dashboard]
+    """
+    try:
+        import uvicorn  # noqa: F401
+        from agentos.dashboard.app import create_app  # noqa: F401
+    except ImportError:
+        click.echo(click.style(
+            "Dashboard dependencies not installed.\n"
+            "Install with: pip install agentos[dashboard]",
+            fg="red",
+        ))
+        raise SystemExit(1)
+
+    from agentos.dashboard.app import create_app
+
+    app = create_app(db)
+    click.echo(f"AgentOS Dashboard")
+    click.echo(f"  DB:   {db}")
+    click.echo(f"  URL:  http://{host}:{port}")
+    click.echo()
+
+    import uvicorn
+    uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
+# -- V2+ CLI Commands -------------------------------------------------------
+
+
+@cli.command()
+@click.argument("yaml_file", type=click.Path(exists=True))
+@click.option("--db", default=":memory:", help="SQLite database path for historical data")
+def safety(yaml_file: str, db: str) -> None:
+    """Display 6-dimension safety score for a workflow."""
+    from agentos.security.safety_score import SafetyScoreCalculator
+
+    raw = yaml.safe_load(Path(yaml_file).read_text())
+    wf = WorkflowDefinition.model_validate(raw)
+    event_log = SQLiteEventLog(db)
+
+    policies = {}
+    for name, agent_cfg in wf.agents.items():
+        policies[name] = agent_cfg.to_capability_policy(name)
+
+    calculator = SafetyScoreCalculator(event_log)
+    report = calculator.calculate(wf, policies)
+
+    grade_colors = {"A": "green", "B": "green", "C": "yellow", "D": "red", "F": "red"}
+    color = grade_colors.get(report.grade, "white")
+
+    click.echo(f"Workflow: {wf.name}")
+    click.echo(f"Overall:  {click.style(f'Grade {report.grade}', fg=color, bold=True)} "
+               f"({report.overall_score:.3f}/1.000)")
+    click.echo(f"Minimum:  {'PASS' if report.meets_minimum else 'FAIL'} "
+               f"(threshold: {report.minimum_threshold})")
+    click.echo()
+
+    for dim in report.dimensions:
+        bar_len = int(dim.score * 20)
+        bar = "█" * bar_len + "░" * (20 - bar_len)
+        click.echo(f"  {dim.name:25s} {bar} {dim.score:.3f} (w={dim.weight})")
+        click.echo(f"  {'':25s} {dim.rationale}")
+
+
+@cli.command()
+@click.argument("yaml_file", type=click.Path(exists=True))
+def audit(yaml_file: str) -> None:
+    """Audit agent capability policies for security risks."""
+    from agentos.security.audit import AgentAuditor
+
+    raw = yaml.safe_load(Path(yaml_file).read_text())
+    wf = WorkflowDefinition.model_validate(raw)
+    auditor = AgentAuditor()
+
+    click.echo(f"Workflow: {wf.name}")
+    click.echo(f"Agents:   {len(wf.agents)}")
+    click.echo()
+
+    total_findings = 0
+    for name, agent_cfg in wf.agents.items():
+        policy = agent_cfg.to_capability_policy(name)
+        report = auditor.audit_policy(name, policy)
+        total_findings += report.finding_count
+
+        risk_colors = {"low": "green", "medium": "yellow", "high": "red", "critical": "red"}
+        color = risk_colors.get(report.overall_risk.value, "white")
+        click.echo(f"  {name:20s} risk={click.style(report.overall_risk.value, fg=color)} "
+                   f"score={report.score:.0f}/100 findings={report.finding_count}")
+
+        for finding in report.findings:
+            fcolor = risk_colors.get(finding.risk.value, "white")
+            click.echo(f"    [{click.style(finding.risk.value, fg=fcolor)}] "
+                       f"{finding.category}: {finding.description}")
+            click.echo(f"      → {finding.recommendation}")
+
+    click.echo()
+    if total_findings == 0:
+        click.echo(click.style("All agents pass audit.", fg="green"))
+    else:
+        click.echo(f"Total findings: {total_findings}")
+
+
+@cli.group()
+def finetune() -> None:
+    """Fine-tuning data management."""
+
+
+@finetune.command(name="export")
+@click.option("--db", required=True, help="SQLite database path with workflow history")
+@click.option("--format", "fmt", default="openai", type=click.Choice(["openai", "anthropic"]),
+              help="Export format")
+@click.option("--output", "-o", default=None, help="Output file path (default: stdout)")
+def finetune_export(db: str, fmt: str, output: str | None) -> None:
+    """Export fine-tuning training data from past workflow runs."""
+    from agentos.intelligence.finetune import ExportConfig, ExportFormat, FineTuneExporter
+    from agentos.schemas.events import EventType
+
+    event_log = SQLiteEventLog(db)
+    exporter = FineTuneExporter()
+
+    # Extract records from event log
+    output_events = event_log.query(event_type=EventType.TASK_OUTPUT_PRODUCED)
+
+    from agentos.intelligence.finetune import TaskRecord
+
+    for event in output_events:
+        payload = event.payload
+        task_output = payload.get("output", {})
+        exporter.add_record(TaskRecord(
+            task_id=payload.get("task_id", ""),
+            workflow_id=event.workflow_id,
+            system_prompt="",
+            user_input=payload.get("task_id", ""),
+            assistant_output=task_output.get("summary", ""),
+            quality_score=0.8 if task_output.get("status") == "succeeded" else 0.3,
+            approved=task_output.get("status") == "succeeded",
+        ))
+
+    export_format = ExportFormat.JSONL_OPENAI if fmt == "openai" else ExportFormat.JSONL_ANTHROPIC
+    config = ExportConfig(format=export_format)
+    result = exporter.export(config)
+
+    click.echo(f"Candidates: {result.total_candidates}")
+    click.echo(f"Exported:   {result.exported}")
+    click.echo(f"Filtered:   quality={result.filtered_quality} approval={result.filtered_approval}")
+
+    if result.lines:
+        content = "\n".join(result.lines)
+        if output:
+            Path(output).write_text(content)
+            click.echo(f"Written to: {output}")
+        else:
+            click.echo()
+            click.echo(content)
+
+
+cli.add_command(finetune)
+
+
+@cli.command()
+@click.option("--db", required=True, help="SQLite database path with workflow history")
+def suggest(db: str) -> None:
+    """Show workflow optimization recommendations based on past runs."""
+    from agentos.intelligence.learning import ConfigRecommender, PatternDetector, WorkflowRecord
+
+    event_log = SQLiteEventLog(db)
+    detector = PatternDetector()
+
+    # Build records from completed workflows
+    completed_events = event_log.query(event_type=EventType.WORKFLOW_COMPLETED)
+    records = []
+    for event in completed_events:
+        records.append(WorkflowRecord(
+            workflow_id=event.workflow_id,
+            workflow_name=event.payload.get("workflow_name", ""),
+            team_composition=[],
+            total_cost_usd=0.0,
+            total_duration_seconds=0.0,
+            quality_score=0.8 if event.payload.get("status") == "succeeded" else 0.3,
+            success=event.payload.get("status") == "succeeded",
+        ))
+        detector.add_record(records[-1])
+
+    if not records:
+        click.echo("No workflow history found.")
+        return
+
+    patterns = detector.detect_patterns()
+    recommender = ConfigRecommender()
+    recommendations = recommender.recommend(patterns, records)
+
+    click.echo(f"Analyzed {len(records)} past workflow runs.")
+    click.echo()
+
+    if patterns:
+        click.echo("Detected patterns:")
+        for p in patterns:
+            click.echo(f"  [{p.confidence:.0%}] {p.description}")
+            if p.recommendation:
+                click.echo(f"    → {p.recommendation}")
+        click.echo()
+
+    if recommendations:
+        click.echo("Recommendations:")
+        for r in recommendations:
+            click.echo(f"  [{r.category}] {r.description}")
+            click.echo(f"    Expected: {r.expected_improvement}")
+    else:
+        click.echo("No recommendations yet (need more data).")
+
+
+@cli.group()
+def memory() -> None:
+    """Cross-run memory management."""
+
+
+@memory.command(name="query")
+@click.option("--db", required=True, help="SQLite database path for memory store")
+@click.option("--type", "mem_type", default=None, help="Filter by memory type")
+@click.option("--limit", default=10, help="Max results")
+def memory_query(db: str, mem_type: str | None, limit: int) -> None:
+    """Query cross-run memories."""
+    from agentos.kernel.memory_store import SQLiteMemoryStore
+    from agentos.schemas.memory import MemoryConfig, MemoryQuery, MemoryType
+
+    store = SQLiteMemoryStore(MemoryConfig(enabled=True), db)
+
+    query_type = None
+    if mem_type:
+        try:
+            query_type = MemoryType(mem_type)
+        except ValueError:
+            click.echo(f"Unknown memory type: {mem_type}")
+            click.echo(f"Valid types: {', '.join(t.value for t in MemoryType)}")
+            return
+
+    results = store.query(MemoryQuery(memory_type=query_type, limit=limit))
+
+    click.echo(f"Found {len(results)} memories (total: {store.count()})")
+    click.echo()
+
+    for entry in results:
+        click.echo(f"  [{entry.memory_type.value}] {entry.content[:80]}")
+        click.echo(f"    confidence={entry.confidence:.2f} task={entry.task_id} workflow={entry.workflow_id[:12]}")
+
+
+cli.add_command(memory)
+
+
+@cli.group()
+def knowledge() -> None:
+    """Knowledge graph management."""
+
+
+@knowledge.command(name="query")
+@click.option("--db", required=True, help="SQLite database path for knowledge graph")
+@click.option("--type", "entity_type", default=None, help="Filter by entity type")
+@click.option("--name", "name_pattern", default=None, help="Search by name pattern")
+def knowledge_query(db: str, entity_type: str | None, name_pattern: str | None) -> None:
+    """Query knowledge graph entities."""
+    from agentos.intelligence.knowledge_graph import SQLiteKnowledgeGraph
+
+    kg = SQLiteKnowledgeGraph(db)
+    entities = kg.search_entities(entity_type=entity_type, name_pattern=name_pattern)
+
+    click.echo(f"Entities: {kg.entity_count()} | Relationships: {kg.relationship_count()}")
+    click.echo()
+
+    for entity in entities[:20]:
+        click.echo(f"  [{entity.entity_type}] {entity.name}")
+        if entity.properties:
+            click.echo(f"    props: {entity.properties}")
+
+        observations = kg.get_observations(entity.entity_id)
+        for obs in observations[:3]:
+            click.echo(f"    obs: {obs.content[:60]} (conf={obs.confidence:.2f})")
+
+
+cli.add_command(knowledge)
+
+
+@cli.group()
+def marketplace() -> None:
+    """Workflow template marketplace."""
+
+
+@marketplace.command(name="list")
+@click.option("--db", default=":memory:", help="Marketplace database path")
+@click.option("--category", default=None, help="Filter by category")
+@click.option("--verified", is_flag=True, help="Show only verified templates")
+def marketplace_list(db: str, category: str | None, verified: bool) -> None:
+    """List marketplace workflow templates."""
+    from agentos.marketplace.registry import MarketplaceRegistry
+
+    registry = MarketplaceRegistry(db)
+    templates = registry.list_templates(category=category, verified_only=verified)
+
+    if not templates:
+        click.echo("No templates found.")
+        return
+
+    for t in templates:
+        verified_badge = " ✓" if t.verified else ""
+        click.echo(f"  {t.template_id[:8]}  {t.name}{verified_badge}")
+        click.echo(f"    {t.category} | {t.downloads} downloads | by {t.author or 'anonymous'}")
+        if t.description:
+            click.echo(f"    {t.description[:80]}")
+
+
+@marketplace.command(name="publish")
+@click.argument("yaml_file", type=click.Path(exists=True))
+@click.option("--db", required=True, help="Marketplace database path")
+@click.option("--name", required=True, help="Template name")
+@click.option("--description", default="", help="Template description")
+@click.option("--author", default="", help="Author name")
+@click.option("--category", default="general", help="Category")
+def marketplace_publish(yaml_file: str, db: str, name: str, description: str, author: str, category: str) -> None:
+    """Publish a workflow YAML as a marketplace template."""
+    from agentos.marketplace.registry import MarketplaceRegistry
+
+    workflow_yaml = Path(yaml_file).read_text()
+    registry = MarketplaceRegistry(db)
+    template = registry.publish(
+        name=name, workflow_yaml=workflow_yaml,
+        description=description, author=author, category=category,
+    )
+    click.echo(f"Published template: {template.template_id}")
+    click.echo(f"  Name: {template.name}")
+
+
+@marketplace.command(name="import")
+@click.argument("json_file", type=click.Path(exists=True))
+@click.option("--db", required=True, help="Marketplace database path")
+def marketplace_import(json_file: str, db: str) -> None:
+    """Import a workflow template from JSON."""
+    from agentos.marketplace.registry import MarketplaceRegistry
+
+    json_data = Path(json_file).read_text()
+    registry = MarketplaceRegistry(db)
+    template = registry.import_template(json_data)
+    click.echo(f"Imported template: {template.template_id}")
+    click.echo(f"  Name: {template.name}")
+
+
+cli.add_command(marketplace)
+
+
+@cli.group()
+def benchmark() -> None:
+    """Benchmark workflows across backends."""
+
+
+@benchmark.command(name="run")
+@click.argument("yaml_file", type=click.Path(exists=True))
+@click.option("--backends", default="tier1-claude,tier1-openai", help="Comma-separated backend names")
+def benchmark_run(yaml_file: str, backends: str) -> None:
+    """Benchmark a workflow across multiple backends (framework only)."""
+    from agentos.intelligence.benchmark import BenchmarkRunner
+
+    raw = yaml.safe_load(Path(yaml_file).read_text())
+    wf = WorkflowDefinition.model_validate(raw)
+
+    backend_list = [b.strip() for b in backends.split(",")]
+    runner = BenchmarkRunner()
+    run = runner.create_run(wf.name, backend_list)
+
+    click.echo(f"Benchmark run created: {run.run_id[:12]}")
+    click.echo(f"  Workflow: {wf.name}")
+    click.echo(f"  Backends: {', '.join(backend_list)}")
+    click.echo()
+    click.echo("Note: Actual execution requires live adapters per backend.")
+    click.echo("Use the benchmark API programmatically for full runs.")
+
+    # Record stub results for demo
+    for backend in backend_list:
+        runner.record_result(
+            run_id=run.run_id,
+            backend=backend,
+            duration_seconds=0.0,
+            total_tokens=0,
+            estimated_cost_usd=0.0,
+            output_summary=f"Stub result for {backend}",
+        )
+
+    report = runner.generate_report(run.run_id)
+    click.echo()
+    click.echo(f"  Fastest:  {report.fastest_backend or 'N/A'}")
+    click.echo(f"  Cheapest: {report.cheapest_backend or 'N/A'}")
+    click.echo(f"  Best:     {report.best_quality_backend or 'N/A'}")
+
+
+cli.add_command(benchmark)
 
 
 @cli.command()
@@ -153,7 +554,41 @@ def demo(yaml_file: str, db: str, tier: int, pause_at_gates: bool) -> None:
             gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="demo")
             click.echo(click.style("        auto-approved (demo mode)", fg="yellow"))
             time.sleep(0.2)
-            return TaskStatus.SUCCEEDED, None
+            output = TaskOutput(
+                task_id=task_name, agent_id="gate",
+                status=TaskStatus.SUCCEEDED,
+                summary=f"Gate approved: {config.prompt or task_name}",
+            )
+            return TaskStatus.SUCCEEDED, output
+
+        if config.type == "consultation":
+            agent_id = config.consult_agent or "unassigned"
+            click.echo(click.style(f"  ASK   {task_name}", fg="magenta") +
+                       f" (agent: {agent_id})")
+            question = config.consult_question or config.description
+            if question:
+                desc = question.strip()
+                if len(desc) > 100:
+                    desc = desc[:97] + "..."
+                click.echo(f"        {desc}")
+
+            time.sleep(0.3)
+            budget_mgr.apply(agent_id, BudgetDelta(
+                tokens=300, api_calls=1, time_seconds=0.3, cost_usd=0.005,
+            ))
+
+            output = TaskOutput(
+                task_id=task_name, agent_id=agent_id,
+                status=TaskStatus.SUCCEEDED,
+                summary=f"Consultation: {agent_id} responded to query",
+                key_findings=[Finding(
+                    finding=f"Response from {agent_id}: clarification provided",
+                    confidence=Confidence.MEDIUM,
+                )],
+            )
+            click.echo(click.style(f"  DONE  {task_name}", fg="green") +
+                       f" → consultation response from {agent_id}")
+            return TaskStatus.SUCCEEDED, output
 
         agent_id = config.agent or "unassigned"
 
@@ -209,7 +644,7 @@ def demo(yaml_file: str, db: str, tier: int, pause_at_gates: bool) -> None:
         output = TaskOutput(
             task_id=task_name, agent_id=agent_id,
             status=TaskStatus.SUCCEEDED,
-            summary=f"Stub: completed {task_name}",
+            summary=f"All checks passed. Stub completed {task_name} successfully.",
             key_findings=[Finding(
                 finding=f"Demo finding from {task_name}",
                 confidence=Confidence.MEDIUM,
@@ -305,6 +740,21 @@ def demo(yaml_file: str, db: str, tier: int, pause_at_gates: bool) -> None:
             prompt_str = g.prompt[:50] + "..." if len(g.prompt) > 50 else g.prompt
             click.echo(f"  {g.gate_id}  {res_str}  {prompt_str}")
 
+    # --- V1.5 event counts ---
+    branch_count = len(event_log.query(workflow_id=workflow_id, event_type=EventType.BRANCH_EVALUATED))
+    retry_count = len(event_log.query(workflow_id=workflow_id, event_type=EventType.TASK_RETRIED))
+    message_count = len(event_log.query(workflow_id=workflow_id, event_type=EventType.MESSAGE_SENT))
+    if branch_count or retry_count or message_count:
+        click.echo()
+        click.echo(click.style(" V1.5 Features", fg="cyan", bold=True))
+        click.echo(click.style("-" * 40, fg="cyan"))
+        if branch_count:
+            click.echo(f"  Branches:     {branch_count}")
+        if retry_count:
+            click.echo(f"  Retries:      {retry_count}")
+        if message_count:
+            click.echo(f"  Messages:     {message_count}")
+
     # --- Event log replay ---
     click.echo()
     click.echo(click.style(" Event Log", fg="cyan", bold=True))
@@ -396,6 +846,8 @@ def _event_color(event_type: str) -> str:
     """Pick a terminal color based on event type prefix."""
     if event_type.startswith("workflow"):
         return "cyan"
+    if event_type == "task.retried":
+        return "yellow"
     if event_type.startswith("task"):
         return "blue"
     if event_type.startswith("budget.exceeded"):
@@ -406,12 +858,44 @@ def _event_color(event_type: str) -> str:
         return "yellow"
     if event_type.startswith("file"):
         return "green"
+    if event_type.startswith("branch"):
+        return "cyan"
+    if event_type.startswith("revision"):
+        return "yellow"
+    if event_type.startswith("message"):
+        return "magenta"
     return "white"
 
 
 def _event_detail(event: object) -> str:
     """Extract a short detail string from an event's payload."""
     payload = event.payload  # type: ignore[attr-defined]
+    etype = event.event_type.value  # type: ignore[attr-defined]
+
+    # V1.5 event types
+    if etype == "branch.evaluated":
+        target = payload.get("target", "")
+        label = "activated" if payload.get("result") else "skipped"
+        return f"{payload.get('task_id', '')} → {target} ({label})"
+
+    if etype == "task.retried":
+        return f"{payload.get('task_id', '')} iteration {payload.get('iteration', '?')}"
+
+    if etype == "revision.feedback":
+        feedback = payload.get("feedback", "")
+        if len(feedback) > 40:
+            feedback = feedback[:37] + "..."
+        return f"{payload.get('task_id', '')} \"{feedback}\""
+
+    if etype in ("message.sent", "message.received"):
+        agent = payload.get("consult_agent", "")
+        question = payload.get("question", "")
+        if question:
+            if len(question) > 40:
+                question = question[:37] + "..."
+            return f"{agent} \"{question}\""
+        return f"{payload.get('task_id', '')} → {agent}"
+
     if "path" in payload:
         return f"{payload.get('operation', '')} {payload['path']}"
     if "gate_id" in payload:

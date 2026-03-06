@@ -17,82 +17,27 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentos.adapters.base import AgentAdapter
+from agentos.adapters.tier2_shared import (
+    DEFAULT_TIMEOUT,
+    MAX_MANIFEST_RETRIES,
+    build_prompt,
+    manifest_to_task_output,
+    parse_manifest,
+    write_predecessor_context,
+)
 from agentos.kernel.budget_manager import BudgetManager
 from agentos.schemas.budget import BudgetDelta
 from agentos.schemas.task import (
-    Confidence,
-    Finding,
     TaskMetrics,
     TaskOutput,
     TaskStatus,
 )
 
-# Maximum retries when manifest.json is missing or invalid.
-MAX_MANIFEST_RETRIES = 2
-
-# Default timeout for a single Claude Code invocation (seconds).
-DEFAULT_TIMEOUT = 300
-
-
-def _build_prompt(
-    task_description: str,
-    role: str,
-    predecessor_context: list[TaskOutput],
-) -> str:
-    """Assemble the full prompt sent to Claude Code via -p flag."""
-    parts = []
-
-    if role:
-        parts.append(f"## Role\n{role}")
-
-    parts.append(f"## Task\n{task_description}")
-
-    if predecessor_context:
-        parts.append("## Predecessor task outputs")
-        for ctx in predecessor_context:
-            parts.append(f"### Task: {ctx.task_id}")
-            parts.append(f"Status: {ctx.status}")
-            parts.append(f"Summary: {ctx.summary}")
-            if ctx.key_findings:
-                parts.append("Findings:")
-                for f in ctx.key_findings:
-                    parts.append(f"  - [{f.confidence}] {f.finding}")
-            if ctx.open_questions:
-                parts.append("Open questions:")
-                for q in ctx.open_questions:
-                    parts.append(f"  - {q}")
-            parts.append("")
-
-    parts.append(
-        "## Output requirement\n"
-        "When you are done, create a file called `manifest.json` in the "
-        "current directory with this exact JSON structure:\n"
-        "```json\n"
-        "{\n"
-        '  "summary": "1-3 sentence summary of what you accomplished",\n'
-        '  "findings": [\n'
-        '    {"finding": "what you found", "confidence": "high|medium|low", '
-        '"sources": ["optional source refs"]}\n'
-        "  ],\n"
-        '  "open_questions": ["any unresolved questions"],\n'
-        '  "files_produced": ["list of files you created or modified"]\n'
-        "}\n"
-        "```\n"
-        "This manifest is REQUIRED. Do not skip it."
-    )
-
-    return "\n\n".join(parts)
-
-
-def _write_predecessor_context(workspace: Path, predecessors: list[TaskOutput]) -> None:
-    """Write predecessor TaskOutput manifests to workspace for reference."""
-    if not predecessors:
-        return
-    ctx_dir = workspace / ".agentos_context"
-    ctx_dir.mkdir(exist_ok=True)
-    for ctx in predecessors:
-        path = ctx_dir / f"{ctx.task_id}.json"
-        path.write_text(ctx.model_dump_json(indent=2))
+# Re-export for backward compatibility with existing tests.
+_build_prompt = build_prompt
+_write_predecessor_context = write_predecessor_context
+_parse_manifest = parse_manifest
+_manifest_to_task_output = manifest_to_task_output
 
 
 def _build_command(
@@ -100,13 +45,14 @@ def _build_command(
     allowed_tools: list[str],
     *,
     output_format: str = "json",
+    max_turns: int = 30,
 ) -> list[str]:
     """Build the claude CLI command."""
     cmd = [
         "claude",
         "--print",
         "--output-format", output_format,
-        "--max-turns", "30",
+        "--max-turns", str(max_turns),
     ]
     # stream-json requires --verbose in --print mode
     if output_format == "stream-json":
@@ -114,7 +60,27 @@ def _build_command(
     cmd.extend(["-p", prompt])
     if allowed_tools:
         cmd.extend(["--allowedTools", ",".join(allowed_tools)])
+    else:
+        # SECURITY: If no tools are specified, restrict to a safe baseline.
+        # Without --allowedTools, Claude Code gives the agent ALL tools
+        # including Bash, which violates the governance model.
+        cmd.extend(["--allowedTools", "Read,Write,Edit,Glob,Grep"])
+    # Always block Agent and TodoWrite — these are Claude Code built-in tools
+    # that spawn uncontrolled sub-agents or manage internal state we don't track.
+    cmd.extend(["--disallowedTools", "Agent,TodoWrite,ToolSearch"])
     return cmd
+
+
+def _extract_tool_names(event: dict[str, Any]) -> list[str]:
+    """Extract tool names used in a stream event."""
+    tools: list[str] = []
+    if event.get("type") == "assistant":
+        for block in event.get("message", {}).get("content", []):
+            if block.get("type") == "tool_use":
+                name = block.get("name", "")
+                if name:
+                    tools.append(name)
+    return tools
 
 
 def _format_stream_event(event: dict[str, Any]) -> str | None:
@@ -157,11 +123,15 @@ def _run_streaming(
     env: dict[str, str],
     timeout: int,
     log_fn: Callable[[str], None],
+    tools_used: set[str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run claude CLI with stream-json, streaming events via log_fn.
 
     Returns a CompletedProcess whose ``stdout`` contains the JSON-encoded
     ``result`` event (compatible with the non-streaming code path).
+
+    If ``tools_used`` is provided, tool names observed in stream events
+    are added to it for post-hoc verification.
     """
     proc = subprocess.Popen(
         cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -184,6 +154,10 @@ def _run_streaming(
             if event.get("type") == "result":
                 result_json = line
             else:
+                # Track tool usage for post-hoc verification
+                if tools_used is not None:
+                    for tool_name in _extract_tool_names(event):
+                        tools_used.add(tool_name)
                 formatted = _format_stream_event(event)
                 if formatted:
                     log_fn(formatted)
@@ -253,47 +227,6 @@ def _parse_usage(output: dict[str, Any]) -> tuple[int, float]:
     return total, cost
 
 
-def _parse_manifest(workspace: Path) -> dict[str, Any] | None:
-    """Read and parse manifest.json from the workspace.
-
-    Returns None if the file doesn't exist or is invalid JSON.
-    """
-    manifest_path = workspace / "manifest.json"
-    if not manifest_path.exists():
-        return None
-    try:
-        return json.loads(manifest_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-def _manifest_to_task_output(
-    manifest: dict[str, Any],
-    task_id: str,
-    agent_id: str,
-    metrics: TaskMetrics,
-) -> TaskOutput:
-    """Convert a parsed manifest dict to a TaskOutput."""
-    findings = []
-    for f in manifest.get("findings", []):
-        if isinstance(f, dict):
-            findings.append(Finding(
-                finding=f.get("finding", ""),
-                confidence=Confidence(f.get("confidence", "medium")),
-                sources=f.get("sources", []),
-            ))
-
-    return TaskOutput(
-        task_id=task_id,
-        agent_id=agent_id,
-        status=TaskStatus.SUCCEEDED,
-        summary=manifest.get("summary", "Task completed."),
-        key_findings=findings,
-        open_questions=manifest.get("open_questions", []),
-        metrics=metrics,
-    )
-
-
 class ClaudeCodeAdapter(AgentAdapter):
     """Tier 2 adapter for Claude Code CLI.
 
@@ -318,19 +251,25 @@ class ClaudeCodeAdapter(AgentAdapter):
         agent_id: str,
         *,
         timeout: int = DEFAULT_TIMEOUT,
+        max_turns: int = 30,
         run_subprocess: Any | None = None,
         log_fn: Callable[[str], None] | None = None,
+        sandbox_handle: Any | None = None,
     ) -> None:
         self._budget_manager = budget_manager
         self._agent_id = agent_id
         self._timeout = timeout
+        self._max_turns = max_turns
         self._process: subprocess.Popen | None = None
         self._terminated = False
         # Allow injecting a mock for subprocess.run in tests
         self._run_subprocess = run_subprocess or subprocess.run
         self._log_fn = log_fn
+        self._sandbox = sandbox_handle
         # Stream events only when log_fn is set and no mock is injected
         self._use_streaming = log_fn is not None and run_subprocess is None
+        # Tracks tools the agent actually used (populated during streaming)
+        self.last_tools_used: set[str] = set()
 
     async def execute_task(
         self,
@@ -354,15 +293,28 @@ class ClaudeCodeAdapter(AgentAdapter):
         # Write predecessor context files into workspace
         _write_predecessor_context(workspace, predecessor_context)
 
-        prompt = _build_prompt(task_description, role, predecessor_context)
+        # Build workspace file index so agent doesn't waste turns exploring
+        workspace_files: list[str] = []
+        ws_root = workspace.parent  # workspace is ws_root/config.workspace/task_name
+        if ws_root.exists():
+            for p in sorted(ws_root.rglob("*")):
+                if p.is_file() and ".agentos_context" not in str(p):
+                    workspace_files.append(str(p))
+
+        prompt = _build_prompt(
+            task_description, role, predecessor_context,
+            workspace_files=workspace_files if workspace_files else None,
+        )
         out_fmt = "stream-json" if self._use_streaming else "json"
-        cmd = _build_command(prompt, allowed_tools, output_format=out_fmt)
+        cmd = _build_command(prompt, allowed_tools, output_format=out_fmt,
+                             max_turns=self._max_turns)
         env = _build_env()
 
         total_tokens = 0
         total_cost = 0.0
         api_calls = 0
         raw_output: dict[str, Any] = {}
+        self.last_tools_used = set()
 
         # Run with retries for manifest validation
         for attempt in range(1 + MAX_MANIFEST_RETRIES):
@@ -370,10 +322,20 @@ class ClaudeCodeAdapter(AgentAdapter):
                 break
 
             try:
-                if self._use_streaming:
+                if self._sandbox is not None and self._run_subprocess is subprocess.run:
+                    # Use sandbox handle to run commands
+                    result = self._sandbox.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=self._timeout,
+                        env=env,
+                    )
+                elif self._use_streaming:
                     result = _run_streaming(
                         cmd, str(workspace), env,
                         self._timeout, self._log_fn,
+                        tools_used=self.last_tools_used,
                     )
                 else:
                     result = self._run_subprocess(
@@ -454,6 +416,7 @@ class ClaudeCodeAdapter(AgentAdapter):
                     "The file must be valid JSON in the current directory.",
                     allowed_tools,
                     output_format=out_fmt,
+                    max_turns=self._max_turns,
                 )
 
         # All retries exhausted

@@ -147,8 +147,8 @@ The architecture must ensure that no core feature (DAG execution, gates, budget 
 | Benchmarking engine | V2+ | Requires significant usage data |
 | Multi-user deployment | V2 | Local-first is sufficient for initial users |
 | Web dashboard (read-only monitoring) | V1.5 | Can be added once API is stable |
-| Conditional branching in DAGs | V1.5 | Useful but not launch-critical |
-| Review/revision loops | V1.5 | Can be manually configured with gates in V1 |
+| Conditional branching in DAGs | Done | Implemented in V1.5 — condition evaluator, conditional edges in DAG executor |
+| Review/revision loops | Done | Implemented in V1.5 — native revision loops with `max_revisions` support |
 
 ### Open Research Areas
 
@@ -170,9 +170,14 @@ V1.5 is not a separate release — it is the set of features added in the 2-3 mo
 
 **V1.5 scope** (month 7-9):
 - **Read-only web dashboard**: Real-time session monitoring, event log viewer, cost charts. No workflow builder — CLI remains the authoring interface.
-- **Conditional branching in DAGs**: If/else edges based on task output (e.g., "if tests pass, deploy; if tests fail, notify"). Requires a simple expression evaluator on edge conditions.
-- **Review/revision loops**: When an approval gate rejects, re-route back to the producing agent with rejection feedback for revision. Currently achievable manually by re-running with modified input; V1.5 makes it a native workflow primitive.
+- ~~**Conditional branching in DAGs**~~: **Done.** If/else edges based on task output, with a `ConditionEvaluator` supporting field access, comparisons, and boolean logic. 4 example workflows demonstrate conditional patterns.
+- ~~**Review/revision loops**~~: **Done.** Native `max_revisions` on task nodes, automatic re-routing with feedback on gate rejection or validation failure.
+- **Consultation tasks** (added): A new collaborative primitive allowing agents to request mid-workflow input from other agents without a full task handoff. Enables code review loops and expert consultation patterns.
 - **Second Tier 2 adapter**: Codex or another autonomous agent tool at production-grade quality.
+
+**Remaining V1.5 work:**
+- Read-only web dashboard
+- Second Tier 2 adapter (Codex or equivalent)
 
 V1.5 is scoped small intentionally — it should be 4-6 weeks of focused development, not a second V1.
 

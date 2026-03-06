@@ -24,6 +24,7 @@ from agentos.schemas.gate import GateResolution, GateType
 from agentos.schemas.task import (
     Confidence,
     Finding,
+    RetryPolicy,
     TaskConfig,
     TaskOutput,
     TaskStatus,
@@ -286,3 +287,169 @@ class TestEventLogCompleteness:
         # Agent tasks produce outputs, gate does not
         assert "research" in output_task_ids
         assert "implement" in output_task_ids
+
+
+# ---------------------------------------------------------------------------
+# V1.5 collaborative demo: revision loops with gate rejection
+# ---------------------------------------------------------------------------
+
+def _collaborative_workflow() -> WorkflowDefinition:
+    """Workflow with revision loop: implement → review_gate → deploy."""
+    return WorkflowDefinition(
+        name="collaborative-demo",
+        budget=BudgetSpec(max_tokens=100000, max_cost_usd=10.00),
+        tasks={
+            "implement": TaskConfig(
+                name="implement",
+                agent="developer",
+                description="Implement the feature. Address revision feedback if provided.",
+                retry_policy=RetryPolicy(max_retries=2, on="gate_rejected"),
+            ),
+            "review_gate": TaskConfig(
+                name="review_gate",
+                type="approval_gate",
+                depends_on=["implement"],
+                prompt="Review the implementation. Approve or reject with feedback.",
+            ),
+            "deploy": TaskConfig(
+                name="deploy",
+                agent="deployer",
+                description="Deploy the approved feature.",
+                depends_on=["review_gate"],
+            ),
+        },
+        agents={
+            "developer": {
+                "adapter": "tier1",
+                "role": "Implement features",
+                "budget": {"max_tokens": 40000},
+            },
+            "deployer": {
+                "adapter": "tier1",
+                "role": "Deploy releases",
+                "budget": {"max_tokens": 20000},
+            },
+        },
+    )
+
+
+def _run_collaborative_demo(run_id: int) -> dict:
+    """Execute one collaborative demo: gate rejects once, implement retries, gate approves."""
+    wf = _collaborative_workflow()
+    workflow_id = f"collab-run-{run_id}"
+
+    event_log = SQLiteEventLog()
+    seq = SeqCounter()
+    budget_mgr = BudgetManager(
+        workflow_spec=wf.budget,
+        event_log=event_log,
+        seq=seq,
+        workflow_id=workflow_id,
+        agent_specs={name: agent.budget for name, agent in wf.agents.items()},
+    )
+
+    gate_call_count: dict[str, int] = {}
+
+    def executor(name, config, predecessors=None):
+        predecessors = predecessors or []
+
+        if config.type == "approval_gate":
+            gate_call_count[name] = gate_call_count.get(name, 0) + 1
+            if gate_call_count[name] == 1:
+                # First call: reject
+                output = TaskOutput(
+                    task_id=name, agent_id="gate",
+                    status=TaskStatus.FAILED,
+                    summary="Rejected: needs error handling improvements.",
+                )
+                return TaskStatus.FAILED, output
+            # Subsequent calls: approve
+            output = TaskOutput(
+                task_id=name, agent_id="gate",
+                status=TaskStatus.SUCCEEDED,
+                summary="Approved: implementation looks good.",
+            )
+            return TaskStatus.SUCCEEDED, output
+
+        agent_id = config.agent or "unknown"
+        budget_mgr.apply(agent_id, BudgetDelta(
+            tokens=500, api_calls=1, time_seconds=1.0, cost_usd=0.01,
+        ))
+
+        output = TaskOutput(
+            task_id=name, agent_id=agent_id,
+            status=TaskStatus.SUCCEEDED,
+            summary=f"Agent {agent_id} completed {name}",
+            key_findings=[
+                Finding(
+                    finding=f"Finding from {name}",
+                    confidence=Confidence.HIGH,
+                ),
+            ],
+        )
+        return TaskStatus.SUCCEEDED, output
+
+    dag = DAGExecutor(
+        workflow=wf, event_log=event_log, seq=seq,
+        budget_manager=budget_mgr, task_executor=executor,
+    )
+    result = dag.run(workflow_id)
+
+    all_events = event_log.replay(workflow_id)
+    return {
+        "run_id": run_id,
+        "result": result,
+        "events": all_events,
+        "budget_mgr": budget_mgr,
+        "event_log": event_log,
+        "workflow_id": workflow_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Test class: V1.5 collaborative demo — 10 consecutive runs
+# ---------------------------------------------------------------------------
+
+@pytest.mark.e2e
+class TestCollaborativeDemo10Runs:
+    """V1.5 exit criterion: revision loops work 10/10 times."""
+
+    @pytest.mark.parametrize("run_id", range(10))
+    def test_collaborative_run(self, run_id):
+        data = _run_collaborative_demo(run_id)
+
+        # Workflow succeeds after retry
+        assert data["result"].status == "succeeded"
+        assert set(data["result"].completed_tasks) == {
+            "implement", "review_gate", "deploy",
+        }
+        assert len(data["result"].failed_tasks) == 0
+
+        # Verify TASK_RETRIED event
+        event_types = [e.event_type for e in data["events"]]
+        assert EventType.TASK_RETRIED in event_types
+
+        retry_events = data["event_log"].query(
+            workflow_id=data["workflow_id"],
+            event_type=EventType.TASK_RETRIED,
+        )
+        assert len(retry_events) == 1
+        assert retry_events[0].payload["task_id"] == "implement"
+        assert retry_events[0].payload["iteration"] == 2
+
+        # Verify REVISION_FEEDBACK event
+        assert EventType.REVISION_FEEDBACK in event_types
+
+        feedback_events = data["event_log"].query(
+            workflow_id=data["workflow_id"],
+            event_type=EventType.REVISION_FEEDBACK,
+        )
+        assert len(feedback_events) == 1
+        assert feedback_events[0].payload["task_id"] == "implement"
+        assert "Rejected" in feedback_events[0].payload["feedback"]
+
+        # Budget: implement ran twice (500×2) + deploy (500) = 1500
+        total = data["budget_mgr"].total_usage
+        assert total.tokens_used == 1500
+        assert total.api_calls_made == 3
+        assert total.cost_usd == pytest.approx(0.03)

@@ -1,0 +1,43 @@
+# Consultation: research → clarify → analysis
+name: research_with_consultation
+version: "1.0"
+
+budget:
+  max_tokens: 80000
+  max_cost_usd: 3.00
+
+agents:
+  researcher:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Conduct market research and gather data."
+    tools: [web_search, file_write]
+    budget:
+      max_tokens: 30000
+
+  analyst:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Analyze research data and produce insights."
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 30000
+
+tasks:
+  research:
+    name: research
+    agent: researcher
+    description: "Research the current market for AI governance tools."
+
+  clarify:
+    name: clarify
+    type: consultation
+    depends_on: [research]
+    consult_agent: researcher
+    consult_question: "What data sources did you use for market size estimates?"
+
+  analysis:
+    name: analysis
+    agent: analyst
+    description: "Analyze the research findings and clarification to produce a market report."
+    depends_on: [research, clarify]

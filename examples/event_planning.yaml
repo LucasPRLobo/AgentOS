@@ -1,0 +1,116 @@
+# Event Planning — Team-Based Workflow
+#
+# Demonstrates team orchestration with a non-technical, relatable domain.
+# The event director manages a team of specialists to plan a corporate conference.
+#
+# DAG structure:
+#
+#   client_brief (input_gate — user provides event requirements)
+#         │
+#   plan_event (event_director manages team: venue, content, logistics)
+#         │
+#   client_review (approval_gate — client approves the plan)
+#
+
+name: event_planning
+version: "1.0"
+
+budget:
+  max_tokens: 200000
+  max_api_calls: 100
+  max_cost_usd: 5.00
+  max_time_seconds: 1800
+  max_concurrent_tasks: 3
+
+teams:
+  planning_team:
+    manager: event_director
+    members:
+      - venue_coordinator
+      - content_planner
+      - logistics_manager
+    description: >
+      Plans all aspects of a corporate conference including venue selection,
+      agenda design, speaker coordination, and logistics management.
+    human_input: true
+
+agents:
+  event_director:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are an experienced event director who coordinates corporate conferences.
+      You delegate venue research, agenda planning, and logistics to your team,
+      review their work for quality, and produce a consolidated event plan.
+      Ask the human client for preferences when needed.
+    budget:
+      max_tokens: 60000
+      max_cost_usd: 1.50
+
+  venue_coordinator:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are a venue coordinator specializing in corporate event spaces.
+      Research suitable venues, compare options on capacity, cost, location,
+      and amenities. Produce a ranked shortlist with pros/cons.
+    budget:
+      max_tokens: 40000
+      max_cost_usd: 1.00
+
+  content_planner:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are a content planner for corporate events. Design conference agendas,
+      suggest keynote topics, plan breakout sessions, and coordinate speaker slots.
+      Consider audience engagement and learning objectives.
+    budget:
+      max_tokens: 40000
+      max_cost_usd: 1.00
+
+  logistics_manager:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are a logistics manager for corporate events. Handle catering plans,
+      A/V equipment needs, transportation arrangements, registration flow,
+      and day-of timeline coordination.
+    budget:
+      max_tokens: 40000
+      max_cost_usd: 1.00
+
+tasks:
+  client_brief:
+    name: client_brief
+    type: input_gate
+    description: "Client provides event requirements"
+    prompt: >
+      Please describe the corporate conference you want to plan:
+      - Number of attendees
+      - Preferred dates and location
+      - Budget range
+      - Key themes or topics
+      - Any special requirements
+
+  plan_event:
+    name: plan_event
+    type: agent_task
+    agent: event_director
+    description: >
+      Coordinate the planning team to produce a comprehensive event plan.
+      Assign venue research, agenda design, and logistics planning to team
+      members, review their outputs, and produce a consolidated plan.
+    depends_on:
+      - client_brief
+    workspace: shared
+
+  client_review:
+    name: client_review
+    type: approval_gate
+    description: "Client reviews and approves the event plan"
+    prompt: >
+      Review the consolidated event plan. Does this meet your requirements?
+      Approve to proceed or provide feedback for revisions.
+    depends_on:
+      - plan_event

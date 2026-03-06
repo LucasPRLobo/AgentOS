@@ -1,0 +1,893 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# AgentOS Hedge Fund — Full Investment Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# End-to-end non-linear workflow simulating how a real investment firm operates.
+# All agents are Claude Code instances. Managers are CC instances with team
+# supervision capabilities. The DAG mirrors real-life parallelism — research
+# streams run concurrently, adversarial challenge runs in parallel with
+# position construction, and compliance reviews start early.
+#
+# Pipeline: Constraints → Research → Quant → Risk Synthesis → Thesis →
+#           [Position + Adversarial + Preliminary Compliance] (parallel) →
+#           Full Compliance → CIO → Final Memo → Execution → Audit
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# DAG STRUCTURE (non-linear — mirrors real hedge fund operations):
+#
+#   portfolio_parameters (input_gate — human sets constraints)
+#           │
+#   research_intake (research_director manages team screening)
+#           │
+#           ├──→ fundamental ──────────────────┐
+#           ├──→ technical ────────────────────┤  (4 parallel streams,
+#           ├──→ macro_economy ────────────────┤   all → research_feed)
+#           └──→ alt_data ──→ sentiment_check  │
+#                         │                    │
+#                         ↓                    │
+#                  quant_model (sandboxed) ─────┘
+#                         │
+#                         ↓
+#                  code_review
+#                         │
+#                         ↓
+#       risk_synthesis (fan-in, subscribes research_feed)
+#                         │
+#                         ↓
+#       risk_committee_gate (human approval)
+#                         │
+#                         ↓
+#       thesis_formation (conditions → 3 paths)
+#                         │
+#       ┌─────────────────┼─────────────────────────┐
+#       │                 │                          │
+#       │    ┌────────────┼────────────┐             │
+#       │    ↓            ↓            ↓             │
+#       │  position   hedge_strat   hold_memo        │
+#       │    │            │            │             │
+#       │    └─────┬──────┘────────────┘             │
+#       │          │                                 │
+#       │          ↓                                 │
+#       │   trade_structuring ──→ trade_feed         │
+#       │          │                                 │
+#       ↓          │                                 ↓
+#   adversarial_challenge ──→ risk_alerts    prelim_compliance
+#       │          │                                 │
+#       └──────────┼─────────────────────────────────┘
+#                  ↓
+#       full_compliance_review (subscribes risk_alerts, retry loop)
+#                  │
+#                  ↓
+#       compliance_gate (human approval)
+#                  │
+#                  ↓
+#       cio_clarification (consultation — CIO weighs in)
+#                  │
+#                  ↓
+#       final_recommendation
+#                  │
+#                  ↓
+#       execution_gate (human authorizes trade)
+#                  │
+#                  ↓
+#       generate_trade_orders (subscribes trade_feed, produces buy/sell)
+#                  │
+#                  ↓
+#       post_trade_audit (compliance verifies orders)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: hedge_fund_full
+version: "2.0"
+
+# ─── Global Budget ──────────────────────────────────────────────────────────
+
+budget:
+  max_tokens: 1500000
+  max_api_calls: 800
+  max_cost_usd: 22.00
+  max_time_seconds: 7200
+  max_concurrent_tasks: 5
+
+# ─── Channels ───────────────────────────────────────────────────────────────
+
+channels:
+  research_feed:
+    name: research_feed
+    mode: broadcast
+    max_buffer: 200
+  risk_alerts:
+    name: risk_alerts
+    mode: queue
+    max_buffer: 50
+  trade_feed:
+    name: trade_feed
+    mode: broadcast
+    max_buffer: 50
+
+# ─── Teams ──────────────────────────────────────────────────────────────────
+
+teams:
+  research_team:
+    manager: research_director
+    members:
+      - fundamental_analyst
+      - technical_analyst
+      - macro_economist
+      - alt_data_analyst
+    description: >
+      Conducts comprehensive investment research on target equities.
+      Covers fundamental analysis, technical analysis, macroeconomic context,
+      and alternative data signals. The research director assigns initial
+      screening, coordinates parallel research streams, and reviews output
+      quality before passing to risk synthesis.
+    human_input: true
+    budget:
+      max_tokens: 500000
+      max_cost_usd: 8.00
+    workspace: research
+
+  portfolio_team:
+    manager: portfolio_manager
+    members:
+      - execution_strategist
+      - hedge_strategist
+    description: >
+      Constructs actionable positions and manages portfolio risk.
+      Handles thesis formation, position sizing, execution strategy,
+      hedging, and final trade order generation. The portfolio manager
+      coordinates between the execution and hedging specialists and
+      produces the consolidated trade structure.
+    budget:
+      max_tokens: 400000
+      max_cost_usd: 6.00
+    workspace: execution
+
+  compliance_team:
+    manager: compliance_officer
+    members:
+      - adversarial_validator
+    description: >
+      Reviews all proposed trades for regulatory compliance and challenges
+      investment assumptions. The adversarial validator acts as devil's
+      advocate on every thesis, while the compliance officer enforces
+      regulatory limits, ESG mandates, and risk constraints. Compliance
+      begins preliminary review as soon as a thesis is formed, and performs
+      a full review after adversarial findings are available.
+    budget:
+      max_tokens: 250000
+      max_cost_usd: 4.00
+    workspace: compliance
+
+# ─── Cross-Run Memory ──────────────────────────────────────────────────────
+
+memory:
+  enabled: true
+  decay_rate: 0.05
+  min_confidence: 0.1
+  max_entries: 10000
+
+# ─── Dynamic Spawning ──────────────────────────────────────────────────────
+
+spawn_policy:
+  allow_spawn: true
+  require_approval: true
+  max_spawns_per_workflow: 3
+  allowed_archetypes: [sector_specialist]
+
+archetypes:
+  sector_specialist:
+    name: sector_specialist
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are a sector specialist dynamically spawned to provide deep expertise
+      on a specific industry vertical. Analyze sector-specific competitive
+      dynamics, regulatory landscape, and supply/demand drivers. Provide a
+      focused sector brief that complements the broader research streams.
+    default_tools: [web_search, file_read, file_write]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AGENTS — All Claude Code instances. Managers wrap CC with team supervision.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+agents:
+
+  # ── Research Team (manager + 4 analysts) ──────────────────────────────────
+
+  research_director:
+    adapter: manager
+    role: >
+      You are the Head of Research at a top-tier quantitative hedge fund.
+      You receive investment briefs and coordinate your team of analysts.
+      Route initial screening to the most relevant specialist, then oversee
+      parallel research execution. Review each analyst's output for quality,
+      consistency, and completeness before it proceeds downstream.
+      Challenge sloppy analysis. Demand citations and data sources.
+      If an analyst's work is below standard, send it back with specific
+      feedback on what needs improvement.
+      DO NOT perform research yourself — delegate to your team members.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 40000
+      max_cost_usd: 0.60
+
+  fundamental_analyst:
+    adapter: tier2_claude_code
+    role: >
+      You are a fundamental equity analyst at a top-tier quantitative hedge fund.
+      You evaluate companies based on financial statements, valuation multiples,
+      earnings quality, revenue growth decomposition, and competitive moat.
+      Be precise with numbers. Always cite your data sources.
+      Write analysis in markdown. Include a summary table at the top.
+    tools: [web_search, file_read, file_write]
+    budget:
+      max_tokens: 100000
+      max_cost_usd: 2.00
+      max_time_seconds: 600
+
+  technical_analyst:
+    adapter: tier2_claude_code
+    role: >
+      You are a technical analyst. You evaluate price action, volume profiles,
+      momentum indicators (RSI, MACD), moving averages (20/50/200 EMA),
+      Fibonacci levels, and options flow. Focus on actionable signals with
+      clear timeframes and invalidation levels. State your bias and what
+      would change it.
+    tools: [web_search, file_read, file_write]
+    budget:
+      max_tokens: 100000
+      max_cost_usd: 2.00
+      max_time_seconds: 600
+
+  macro_economist:
+    adapter: tier2_claude_code
+    role: >
+      You are a macro research economist at a hedge fund. You evaluate sector
+      trends, monetary policy impact, fiscal stimulus effects, trade policy
+      risks, and credit cycle positioning. Translate macro signals into
+      specific equity implications with probability-weighted scenarios.
+    tools: [web_search, file_read, file_write]
+    budget:
+      max_tokens: 80000
+      max_cost_usd: 1.50
+    capabilities:
+      - type: "tool:web_search"
+      - type: "tool:file_read"
+      - type: "tool:file_write"
+      - type: "domain:fred.stlouisfed.org"
+      - type: "domain:bls.gov"
+      - type: "domain:federalreserve.gov"
+      - type: "domain:treasury.gov"
+
+  alt_data_analyst:
+    adapter: tier2_claude_code
+    role: >
+      You are an alternative data analyst. You track satellite imagery,
+      job postings, patent filings, developer ecosystem activity,
+      and supply chain signals. Quantify your findings where possible.
+      Flag data freshness and reliability scores for each signal.
+    tools: [web_search, file_read, file_write]
+    budget:
+      max_tokens: 80000
+      max_cost_usd: 1.50
+      max_time_seconds: 600
+
+  # ── Quant & Code Review (standalone agents) ───────────────────────────────
+
+  quant_modeler:
+    adapter: tier2_claude_code
+    role: >
+      You are a quantitative analyst. You build statistical models for
+      fair value estimation, volatility forecasting, and scenario analysis.
+      Produce Python code for your models. Include sensitivity tables
+      and Monte Carlo confidence intervals. All code must be deterministic
+      with fixed random seeds for reproducibility.
+    tools: [file_read, file_write, shell_exec]
+    budget:
+      max_tokens: 120000
+      max_cost_usd: 2.00
+      max_time_seconds: 600
+
+  code_reviewer:
+    adapter: tier2_claude_code
+    role: >
+      You are a senior code reviewer specializing in quantitative finance code.
+      Review Python code for correctness, numerical stability, edge cases,
+      and adherence to best practices. Flag potential issues with floating-point
+      precision, data leakage in backtests, and off-by-one errors in time series.
+      You review code by reading files and writing detailed review reports.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 60000
+      max_cost_usd: 1.00
+      max_time_seconds: 300
+
+  # ── Risk Management (standalone) ──────────────────────────────────────────
+
+  risk_manager:
+    adapter: tier2_claude_code
+    role: >
+      You are the Chief Risk Officer. You synthesize all research streams
+      into a unified risk assessment. Identify contradictions, flag tail
+      risks, stress-test assumptions, and assign conviction scores (1-10).
+      Be the skeptic in the room. Challenge every bullish assumption.
+      Your job is to find the holes before the market does.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 120000
+      max_cost_usd: 2.00
+
+  # ── Portfolio Team (manager + 2 specialists) ──────────────────────────────
+
+  portfolio_manager:
+    adapter: manager
+    role: >
+      You are the Senior Portfolio Manager. You translate research into
+      actionable positions. You coordinate the execution strategist and
+      hedge strategist to build complete trade packages. You form the
+      thesis, delegate position construction and hedging, review and
+      integrate their outputs into a consolidated trade structure.
+      Write for an investment committee audience.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 100000
+      max_cost_usd: 2.00
+
+  execution_strategist:
+    adapter: tier2_claude_code
+    role: >
+      You are the execution strategist. Given a position size and direction,
+      design the optimal entry strategy: VWAP/TWAP timing, dark pool
+      allocation, options overlay for entry, and slippage estimates.
+      Produce concrete order tickets with exact quantities and price levels.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 60000
+      max_cost_usd: 1.00
+
+  hedge_strategist:
+    adapter: tier2_claude_code
+    role: >
+      You are the hedging strategist. Design a hedge portfolio using
+      options, correlated shorts, sector ETFs, or macro instruments.
+      Specify exact strikes, expirations, and notional amounts.
+      Optimize for cost vs protection tradeoff. Calculate max loss
+      and breakeven scenarios.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 60000
+      max_cost_usd: 1.00
+
+  # ── Compliance Team (manager + adversarial validator) ─────────────────────
+
+  compliance_officer:
+    adapter: manager
+    role: >
+      You are the Chief Compliance Officer. Evaluate proposed trades against
+      regulatory concentration limits, insider trading blackout windows,
+      ESG mandate compliance, leverage constraints, and position size limits.
+      If ANY rule is violated, reject with specific remediation steps.
+      You MUST flag issues clearly — do not rubber-stamp.
+      Coordinate the adversarial validator to challenge every thesis.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 60000
+      max_cost_usd: 1.00
+    capabilities:
+      - type: "tool:file_read"
+      - type: "tool:file_write"
+      - type: "path:compliance/**"
+      - type: "path:shared/**"
+      - type: "action:secret:COMPLIANCE_DB"
+
+  adversarial_validator:
+    adapter: tier2_claude_code
+    role: >
+      You are the devil's advocate on the investment committee. Your sole job
+      is to find the strongest possible counterarguments to the proposed thesis.
+      Attack every assumption: valuation multiples, growth projections, moat
+      durability, macro tailwinds, and data quality. If you cannot find a
+      compelling counterargument, say so explicitly — but try hard.
+      Produce a structured rebuttal with severity ratings (critical/major/minor).
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 80000
+      max_cost_usd: 1.50
+
+  # ── CIO (final authority — standalone) ────────────────────────────────────
+
+  cio:
+    adapter: tier2_claude_code
+    role: >
+      You are the Chief Investment Officer. You make the final go/no-go
+      decision on every trade. Ask pointed questions about anything that
+      looks too good to be true. Your job is to protect capital first,
+      generate alpha second. You have seen markets crash — be paranoid.
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 60000
+      max_cost_usd: 1.00
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TASKS — Non-linear DAG mirroring real hedge fund operations
+# ═══════════════════════════════════════════════════════════════════════════════
+
+tasks:
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 0: Portfolio Constraints (human provides investment parameters)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  portfolio_parameters:
+    name: portfolio_parameters
+    type: input_gate
+    prompt: |
+      Portfolio Constraints — please provide before analysis begins:
+
+      1. Target equity ticker (e.g., NVDA, AAPL, TSLA)
+      2. Maximum single-name position size (% of NAV, e.g., 5%)
+      3. Sector concentration limit (% of portfolio, e.g., 20%)
+      4. Maximum portfolio leverage ratio (e.g., 1.5x)
+      5. ESG mandate restrictions (if any)
+      6. Investment horizon (months, e.g., 6-12)
+      7. Risk tolerance (conservative / moderate / aggressive)
+      8. Current portfolio NAV (USD)
+
+      These constraints govern all downstream position sizing, hedging,
+      compliance checks, and trade order generation.
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 1: Research Intake (manager coordinates team screening)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  research_intake:
+    name: research_intake
+    agent: research_director
+    description: >
+      New investment research request received with portfolio constraints.
+      Review the target equity and constraints from the input gate.
+      Route this brief to the most relevant analyst for a preliminary
+      screening assessment. Consider which analyst's expertise best matches
+      the sector and current market environment. The screening will inform
+      the full parallel research phase that follows.
+    depends_on: [portfolio_parameters]
+    workspace: research
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 2: Parallel Research (4 concurrent streams → research_feed)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  fundamental:
+    name: fundamental
+    agent: fundamental_analyst
+    description: >
+      Analyze the target equity from a fundamental perspective.
+      Cover: revenue decomposition by segment, gross/operating margin trends (5Y),
+      FCF conversion, R&D intensity vs peers, customer concentration risk,
+      and forward P/E vs comparable companies.
+      Write analysis to fundamental_report.md with a summary table at the top.
+    depends_on: [research_intake]
+    workspace: research
+    publishes_to: [research_feed]
+
+  technical:
+    name: technical
+    agent: technical_analyst
+    description: >
+      Analyze the target equity from a technical perspective.
+      Cover: 20/50/200 EMA structure, RSI (14-day), MACD histogram,
+      Bollinger Band width (volatility regime), volume profile since last earnings,
+      key support/resistance zones, and options open interest at major strikes.
+      Write analysis to technical_report.md.
+    depends_on: [research_intake]
+    workspace: research
+    publishes_to: [research_feed]
+
+  macro_economy:
+    name: macro_economy
+    agent: macro_economist
+    description: >
+      Analyze the macroeconomic environment relevant to the target equity.
+      Cover: sector capex cycle, trade policy / export controls, Fed funds
+      rate trajectory and impact on growth stocks, industry cycle position
+      (inventory vs demand), and competitive landscape shifts.
+      Produce probability-weighted bull/base/bear macro scenarios.
+      Write to macro_report.md.
+    depends_on: [research_intake]
+    workspace: research
+    publishes_to: [research_feed]
+
+  alt_data:
+    name: alt_data
+    agent: alt_data_analyst
+    description: >
+      Gather alternative data signals for the target equity.
+      Cover: facility construction activity, engineering job postings,
+      patent filing velocity, developer ecosystem growth, supply chain
+      lead times, and social sentiment from earnings call transcripts.
+      Rate each signal strength: strong/moderate/weak with freshness dates.
+      Write to alt_data_report.md.
+    depends_on: [research_intake]
+    workspace: research
+    publishes_to: [research_feed]
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 3: Quant Modeling + Synthesis (sequential dependencies)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  sentiment_check:
+    name: sentiment_check
+    agent: alt_data_analyst
+    description: >
+      Using the alt_data findings, produce a net sentiment score (-100 to +100)
+      and a data confidence rating (high/medium/low).
+      Summarize: is alternative data confirming or contradicting the fundamental
+      and technical picture? Write to sentiment_summary.md.
+    depends_on: [alt_data]
+    workspace: research
+    publishes_to: [research_feed]
+
+  quant_model:
+    name: quant_model
+    agent: quant_modeler
+    description: >
+      Build a quantitative fair-value model using the sentiment check
+      and all research outputs. Include:
+      1) DCF with 3 scenarios (bull/base/bear) and WACC sensitivity table
+      2) Relative valuation (EV/Revenue, P/E, PEG) vs peer group
+      3) Monte Carlo simulation (10,000 paths) for 12-month return distribution
+      4) Value-at-Risk (95% and 99% confidence) for proposed position size
+      Write Python code to quant_model.py and results to quant_results.md.
+    depends_on: [fundamental, technical, macro_economy]
+    workspace: quant
+    publishes_to: [research_feed]
+
+  code_review:
+    name: code_review
+    agent: code_reviewer
+    description: >
+      Review the quantitative model code (quant_model.py) for:
+      1) Numerical stability (overflow, underflow, division by zero)
+      2) Statistical correctness (distribution assumptions, parameter estimation)
+      3) Data leakage in backtesting logic
+      4) Code quality (readability, documentation, test coverage)
+      5) Reproducibility (fixed seeds, deterministic outputs)
+      Produce a code review report in code_review_report.md.
+    depends_on: [quant_model]
+    workspace: quant
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 4: Risk Synthesis (fan-in from all research streams)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  risk_synthesis:
+    name: risk_synthesis
+    agent: risk_manager
+    description: >
+      Synthesize ALL research streams: fundamental, technical, macro, alt data,
+      sentiment, and quant model outputs. Consume findings published to the
+      research_feed channel for a complete picture.
+      Produce:
+      - Agreement matrix: where do analysts converge?
+      - Contradiction log: where do they disagree?
+      - Top 5 risks ranked by probability x impact
+      - Top 5 catalysts ranked by probability x upside
+      - Stress test: what happens if top risk materializes?
+      - Overall conviction score (1-10) with justification
+      - Recommended thesis direction: BULLISH / BEARISH / NEUTRAL
+      Write to risk_synthesis.md.
+    depends_on: [fundamental, technical, macro_economy, code_review, sentiment_check]
+    workspace: synthesis
+    subscribes_to: [research_feed]
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 5: Risk Committee (human reviews synthesis before thesis)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  risk_committee_gate:
+    name: risk_committee_gate
+    type: approval_gate
+    depends_on: [risk_synthesis]
+    prompt: >
+      Risk Committee Review — examine the risk synthesis report.
+      Are the conviction score, risk/catalyst rankings, and thesis direction
+      well-supported by the underlying research? Approve to proceed to
+      thesis formation and position construction.
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 6: Thesis Formation (conditional branching → 3 paths)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  thesis_formation:
+    name: thesis_formation
+    agent: portfolio_manager
+    description: >
+      Based on the risk synthesis, formally declare the investment thesis.
+      State clearly in your summary whether the thesis is:
+      - "BULLISH" (initiate or add to long position)
+      - "BEARISH" (initiate or add to short/hedge position)
+      - "NEUTRAL" (hold / no new position)
+      Include the conviction score (1-10), one-paragraph justification,
+      key upside catalyst, and primary downside risk.
+      Write to thesis.md.
+    depends_on: [risk_committee_gate]
+    workspace: synthesis
+    conditions:
+      - target: position_sizing
+        expression: "'bullish' in summary.lower()"
+      - target: hedge_strategy
+        expression: "'bearish' in summary.lower()"
+      - target: hold_memo
+        expression: "'neutral' in summary.lower()"
+      # trade_structuring always runs — it consolidates whichever path fired
+      - target: trade_structuring
+        expression: "True"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 7: Non-linear — 3 workstreams run IN PARALLEL after thesis
+  #
+  #   Workstream A: Position construction (bull/bear/neutral conditional)
+  #                 → trade structuring
+  #   Workstream B: Adversarial challenge (attacks thesis independently)
+  #   Workstream C: Preliminary compliance (early review of thesis direction)
+  #
+  # This mirrors real life: the portfolio team starts building the trade
+  # while compliance and the adversarial validator work simultaneously.
+  # Nobody waits — everyone works on their piece and it converges at
+  # the full compliance review.
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # ── Workstream A: Position Construction (conditional paths) ───────────────
+
+  position_sizing:
+    name: position_sizing
+    agent: execution_strategist
+    description: >
+      Design the LONG position entry strategy.
+      Respect the portfolio constraints from the input gate.
+      Specify: target position size (% of NAV) with justification,
+      entry plan with 3 tranches and trigger prices, order type split
+      (VWAP/limit), dark pool allocation, options overlay (sell
+      cash-secured puts for entry), estimated market impact (bps),
+      stop loss and trailing stop parameters, take-profit targets.
+      Write to long_position_plan.md.
+    depends_on: [thesis_formation]
+    workspace: execution
+
+  hedge_strategy:
+    name: hedge_strategy
+    agent: hedge_strategist
+    description: >
+      Design a BEARISH hedge or short position.
+      Respect the portfolio constraints from the input gate.
+      Specify: put spread strikes/expirations/premium, collar structure,
+      correlated pair trade candidates, sector ETF short sizing,
+      total hedge cost as % of notional, max loss scenario and breakeven,
+      hedge monitoring triggers (when to roll/close).
+      Write to hedge_plan.md.
+    depends_on: [thesis_formation]
+    workspace: execution
+
+  hold_memo:
+    name: hold_memo
+    agent: portfolio_manager
+    description: >
+      Write a hold memo explaining why no new position is warranted.
+      Include: summary of thesis ambiguity, specific catalysts that
+      would flip to bullish, risks that would flip to bearish,
+      price levels to trigger re-evaluation, and next review date.
+      Write to hold_memo.md.
+    depends_on: [thesis_formation]
+    workspace: synthesis
+
+  trade_structuring:
+    name: trade_structuring
+    agent: portfolio_manager
+    description: >
+      Consolidate the position sizing and/or hedge strategy outputs
+      into a unified trade structure. Combine the entry plan with the
+      hedge overlay. Calculate net exposure, total cost, and margin
+      requirements. Produce a single trade_structure.md that the
+      execution team can convert into concrete orders.
+      This is the portfolio team's final deliverable before compliance.
+      If the thesis is NEUTRAL and only a hold memo was produced,
+      structure it as a "no new trade" memo with monitoring parameters.
+    depends_on: [thesis_formation]
+    workspace: execution
+    publishes_to: [trade_feed]
+
+  # ── Workstream B: Adversarial Challenge (runs parallel with A) ────────────
+
+  adversarial_challenge:
+    name: adversarial_challenge
+    agent: adversarial_validator
+    type: adversarial
+    description: >
+      Challenge the investment thesis formed by the portfolio manager.
+      This runs IN PARALLEL with position construction — you do not wait
+      for the trade to be structured. Attack the thesis itself:
+      1) Valuation assumptions — are multiples justified by growth?
+      2) Competitive moat — how durable is the company's advantage?
+      3) Macro sensitivity — what if the capex cycle reverses?
+      4) Data quality — which alt data signals are weakest?
+      5) Model robustness — do quant results hold under stress?
+      6) Historical analogues — what similar setups ended badly?
+      Produce a structured rebuttal scoring each attack (critical/major/minor).
+      If the thesis survives, say so explicitly.
+    depends_on: [thesis_formation]
+    workspace: compliance
+    publishes_to: [risk_alerts]
+
+  # ── Workstream C: Preliminary Compliance (runs parallel with A & B) ───────
+
+  prelim_compliance:
+    name: prelim_compliance
+    agent: compliance_officer
+    description: >
+      Preliminary compliance screening based on the thesis direction.
+      This runs IN PARALLEL with position construction and adversarial
+      challenge — you start checking early, before the full trade is built.
+      Flag any obvious blockers:
+      1) Is the target equity on any restricted list?
+      2) Are we in a blackout window?
+      3) Does the thesis direction conflict with existing positions?
+      4) Are there ESG red flags for this equity?
+      5) Does current sector exposure leave room for a new position?
+      Write preliminary findings to prelim_compliance_notes.md.
+      Flag "BLOCKER" if any issue would prevent the trade regardless of size.
+    depends_on: [thesis_formation]
+    workspace: compliance
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 8: Full Compliance Review (convergence point — all 3 workstreams)
+  #
+  # Now the compliance officer has:
+  #   - The full trade structure (from portfolio team)
+  #   - The adversarial findings (via risk_alerts channel)
+  #   - Their own preliminary notes
+  # This is the real compliance review with all information available.
+  # ════════════════════════════════════════════════════════════════════════════
+
+  full_compliance_review:
+    name: full_compliance_review
+    agent: compliance_officer
+    description: >
+      Full compliance review with all information now available.
+      You have: the trade structure, adversarial challenge findings
+      (via risk_alerts), and your own preliminary notes.
+      Review against ALL compliance rules:
+      1) Position size within single-name limit from portfolio parameters
+      2) No blackout window violations (cross-check prelim findings)
+      3) ESG screen: no flagged controversies
+      4) Leverage check: total portfolio leverage within limit
+      5) Sector concentration within limit
+      6) Counterparty risk on derivatives positions
+      7) Adversarial severity: any "critical" findings require remediation
+      If ANY violation: state "REJECTED" with specific remediation steps.
+      If clean: state "APPROVED" in your summary.
+      Write to compliance_report.md.
+    depends_on: [trade_structuring, adversarial_challenge, prelim_compliance]
+    workspace: compliance
+    subscribes_to: [risk_alerts]
+    retry_policy:
+      max_retries: 2
+      on: gate_rejected
+
+  compliance_gate:
+    name: compliance_gate
+    type: approval_gate
+    depends_on: [full_compliance_review]
+    prompt: >
+      Compliance Sign-off — review the full compliance report.
+      Has the compliance officer approved the proposed trade?
+      If violations were found, reject to trigger the revision loop
+      (compliance will re-review after the portfolio team remediates).
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 9: CIO Consultation (final authority weighs in)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  cio_clarification:
+    name: cio_clarification
+    type: consultation
+    depends_on: [compliance_gate]
+    consult_agent: cio
+    consult_question: >
+      Before the final recommendation, review the full pipeline output:
+      risk synthesis, thesis, trade structure, adversarial challenge,
+      and compliance report. What is your biggest concern about this
+      trade? Are there assumptions the team should double-check?
+      Do you see any scenario where this blows up that nobody has
+      considered? Give your go/no-go signal.
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 10: Final Recommendation + Trade Execution
+  # ════════════════════════════════════════════════════════════════════════════
+
+  final_recommendation:
+    name: final_recommendation
+    agent: portfolio_manager
+    description: >
+      Produce the FINAL investment committee memo incorporating the
+      CIO's feedback, adversarial challenge findings, and compliance
+      clearance. Structure:
+      1. Executive Summary (1 paragraph with go/no-go)
+      2. Thesis (bull + bear case, incorporating adversarial rebuttal)
+      3. Position Details (size, entry tranches, stops, targets)
+      4. Hedge Overlay (instruments, sizing, cost)
+      5. Risk Management (monitoring triggers, max drawdown scenario)
+      6. Compliance Status (cleared / conditional)
+      7. Adversarial Review Summary (top 3 counterarguments + rebuttals)
+      8. Key Metrics Dashboard (what to monitor daily/weekly)
+      9. Exit Criteria (profit target, stop loss, time-based review)
+      Write to final_recommendation.md.
+    depends_on: [cio_clarification]
+    workspace: synthesis
+    publishes_to: [trade_feed]
+
+  execution_gate:
+    name: execution_gate
+    type: approval_gate
+    depends_on: [final_recommendation]
+    prompt: |
+      TRADE EXECUTION AUTHORIZATION
+
+      The full research-to-recommendation pipeline is complete.
+      Review final_recommendation.md before authorizing trade execution.
+
+      Approving this gate generates concrete BUY/SELL order tickets.
+      These are the final actionable outputs of the pipeline.
+
+      Approve to generate trade orders. Reject to halt.
+
+  generate_trade_orders:
+    name: generate_trade_orders
+    agent: execution_strategist
+    description: >
+      Generate FINAL executable trade order tickets based on the approved
+      recommendation. Consume the trade_feed for position and hedge details.
+
+      Produce a structured JSON trade manifest (trade_orders.json):
+      For each order:
+        order_id, action (BUY/SELL/SELL_SHORT/BUY_TO_COVER),
+        instrument_type (EQUITY/OPTION/ETF), ticker, quantity,
+        order_type (MARKET/LIMIT/STOP_LIMIT/VWAP), limit_price,
+        stop_price, time_in_force (DAY/GTC/IOC), execution_window,
+        dark_pool_eligible, tranche (1/2/3), notes.
+
+      Also produce trade_summary.md with:
+      total notional value, expected execution cost (commissions + impact),
+      net portfolio exposure after execution, position VaR,
+      monitoring plan (first 24/48/72 hours).
+    depends_on: [execution_gate]
+    workspace: execution
+    subscribes_to: [trade_feed]
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 11: Post-Trade Audit (compliance verifies final orders)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  post_trade_audit:
+    name: post_trade_audit
+    agent: compliance_officer
+    description: >
+      Post-trade compliance audit of the generated orders.
+      Verify trade_orders.json against:
+      1) All orders match the approved final recommendation
+      2) Position sizes within portfolio constraints
+      3) No unauthorized instruments or counterparties
+      4) Order types and execution windows are reasonable
+      5) Total notional does not exceed approved limits
+      6) Hedge ratios match the approved hedge plan
+
+      Produce audit_report.md with:
+      - PASS/FAIL status for each check
+      - Any discrepancies between recommendation and orders
+      - Final sign-off: CLEARED FOR EXECUTION / REQUIRES REVISION
+
+      This is the last step. If cleared, the orders are ready for
+      submission to the prime broker.
+    depends_on: [generate_trade_orders]
+    workspace: compliance

@@ -1,136 +1,282 @@
-"""Manager Agent — LLM-powered message router with rule-based fallback."""
+"""Manager Agent — team orchestration logic for LLM-powered supervisors.
+
+The manager is a Claude Code (or other Tier 2) instance that coordinates a
+team of member agents.  This module handles prompt construction, parsing
+the manager's structured assignment output, and round management.
+
+Orchestration flow:
+  1. Manager CC instance receives task + team roster → produces assignment plan
+  2. Adapter dispatches each assignment to the appropriate member adapter
+  3. Member results are formatted and fed back to the manager
+  4. Manager reviews all results → produces consolidated TaskOutput
+
+The manager never calls the Anthropic API directly — it's a real Claude Code
+instance just like the other agents, but with a richer prompt and visibility
+into member work.
+"""
 
 from __future__ import annotations
 
-import re
+import json
 from dataclasses import dataclass, field
-from enum import StrEnum
+from pathlib import Path
+from typing import Any
 
 
-class RouteAction(StrEnum):
-    FORWARD = "forward"
-    ESCALATE = "escalate"
-    DROP = "drop"
-
-
-@dataclass
-class RoutingRule:
-    """A rule for routing messages to agents."""
-
-    pattern: str  # regex pattern to match against message content
-    target_agent: str
-    priority: int = 0  # higher = checked first
-    action: RouteAction = RouteAction.FORWARD
+# Maximum rounds of manager ↔ member interaction before forcing completion.
+MAX_SUPERVISION_ROUNDS = 5
 
 
 @dataclass
-class RouteDecision:
-    """The result of a routing decision."""
+class MemberAssignment:
+    """A work assignment from the manager to a team member."""
 
-    action: RouteAction
-    target_agent: str | None = None
-    confidence: float = 1.0
-    reason: str = ""
+    member: str
+    instruction: str
+    priority: int = 0  # higher = do first
 
 
 @dataclass
-class EscalationPolicy:
-    """When to escalate to human gate."""
+class ManagerPlan:
+    """Parsed output from the manager's planning round."""
 
-    min_confidence: float = 0.5
-    escalation_message: str = "Routing confidence below threshold — human review needed"
+    assignments: list[MemberAssignment] = field(default_factory=list)
+    reasoning: str = ""
+    needs_human_input: bool = False
+    human_question: str = ""
 
 
-class ManagerAgent:
-    """LLM-powered message router with rule-based fallback.
+def build_manager_system_prompt(
+    team_name: str,
+    team_description: str,
+    member_roles: dict[str, str],
+    human_input_enabled: bool,
+) -> str:
+    """Build the role/system section of the manager's prompt.
 
-    Routing flow:
-    1. Check explicit routing rules (regex patterns)
-    2. If no rule matches, use keyword-based heuristic routing
-    3. If confidence is below threshold, escalate to human gate
-
-    In production, step 2 would use an LLM call. Here we implement
-    a keyword-based heuristic as the routing logic.
+    This is injected as the ``role`` parameter when the manager's adapter
+    runs, giving it full context about its team.
     """
+    parts = [
+        f"You are the manager of the **{team_name}** team.",
+        f"\n## Team Purpose\n{team_description}" if team_description else "",
+        "\n## Your Team Members",
+    ]
 
-    def __init__(
-        self,
-        rules: list[RoutingRule] | None = None,
-        agents: list[str] | None = None,
-        escalation: EscalationPolicy | None = None,
-    ) -> None:
-        self._rules = sorted(rules or [], key=lambda r: -r.priority)
-        self._agents = agents or []
-        self._escalation = escalation or EscalationPolicy()
-        self._agent_keywords: dict[str, list[str]] = {}
+    for member_name, role in member_roles.items():
+        role_desc = role if role else "(no role description)"
+        parts.append(f"- **{member_name}**: {role_desc}")
 
-    def register_agent(self, agent_id: str, keywords: list[str] | None = None) -> None:
-        """Register an agent with optional keyword associations."""
-        if agent_id not in self._agents:
-            self._agents.append(agent_id)
-        if keywords:
-            self._agent_keywords[agent_id] = [k.lower() for k in keywords]
+    parts.append(
+        "\n## Your Responsibilities\n"
+        "1. Analyze the task and break it into sub-tasks for your team members.\n"
+        "2. Assign work to the most appropriate member(s) based on their roles.\n"
+        "3. Review member outputs for quality — re-assign with feedback if needed.\n"
+        "4. Produce a consolidated final output that synthesizes all member work."
+    )
 
-    def add_rule(self, rule: RoutingRule) -> None:
-        """Add a routing rule."""
-        self._rules.append(rule)
-        self._rules.sort(key=lambda r: -r.priority)
-
-    def route(self, message: str) -> RouteDecision:
-        """Route a message to the appropriate agent.
-
-        Returns a RouteDecision with the target agent and confidence.
-        """
-        # Step 1: Check explicit rules
-        for rule in self._rules:
-            if re.search(rule.pattern, message, re.IGNORECASE):
-                return RouteDecision(
-                    action=rule.action,
-                    target_agent=rule.target_agent,
-                    confidence=1.0,
-                    reason=f"Matched rule pattern: {rule.pattern}",
-                )
-
-        # Step 2: Keyword-based heuristic routing
-        message_lower = message.lower()
-        best_match: str | None = None
-        best_score = 0
-        total_possible = 0
-
-        for agent_id, keywords in self._agent_keywords.items():
-            if not keywords:
-                continue
-            matches = sum(1 for kw in keywords if kw in message_lower)
-            score = matches / len(keywords)
-            total_possible = max(total_possible, len(keywords))
-            if score > best_score:
-                best_score = score
-                best_match = agent_id
-
-        if best_match and best_score > 0:
-            confidence = min(1.0, best_score * 2)  # Scale up slightly
-            if confidence < self._escalation.min_confidence:
-                return RouteDecision(
-                    action=RouteAction.ESCALATE,
-                    target_agent=best_match,
-                    confidence=confidence,
-                    reason=self._escalation.escalation_message,
-                )
-            return RouteDecision(
-                action=RouteAction.FORWARD,
-                target_agent=best_match,
-                confidence=confidence,
-                reason=f"Keyword match (score={best_score:.2f})",
-            )
-
-        # Step 3: No match — escalate
-        return RouteDecision(
-            action=RouteAction.ESCALATE,
-            target_agent=None,
-            confidence=0.0,
-            reason="No routing rule or keyword match found",
+    if human_input_enabled:
+        parts.append(
+            "\n## Human Oversight\n"
+            "You can request human input when you need clarification or a decision. "
+            "Set `needs_human_input: true` in your assignments JSON and include "
+            "the question in `human_question`."
         )
 
-    def route_batch(self, messages: list[str]) -> list[RouteDecision]:
-        """Route multiple messages."""
-        return [self.route(msg) for msg in messages]
+    parts.append(
+        "\n## CRITICAL: You are a MANAGER, not a worker\n"
+        "**DO NOT** perform any research, analysis, web searches, or coding yourself.\n"
+        "**DO NOT** use tools like WebSearch, Bash, or WebFetch.\n"
+        "Your ONLY job is to assign work to your team members listed above.\n"
+        "Your team members will do the actual work. You plan, delegate, and review.\n"
+        "\n## Assignment Format\n"
+        "When you receive a task, create a file called `assignment_plan.json` "
+        "with your delegation plan:\n"
+        "```json\n"
+        "{\n"
+        '  "reasoning": "Brief explanation of your delegation strategy",\n'
+        '  "assignments": [\n'
+        '    {"member": "member_name", "instruction": "Detailed instructions for them", "priority": 1}\n'
+        "  ],\n"
+        '  "needs_human_input": false,\n'
+        '  "human_question": ""\n'
+        "}\n"
+        "```\n"
+        "Assign to members by their exact name from your team roster above.\n"
+        "Higher priority = execute first. You can assign to multiple members.\n"
+        "Give each member clear, detailed instructions so they know exactly what to do."
+    )
+
+    parts.append(
+        "\n## Review Format\n"
+        "After seeing member results, create `manifest.json` with your consolidated output:\n"
+        "```json\n"
+        "{\n"
+        '  "summary": "Consolidated summary of all team work",\n'
+        '  "findings": [{"finding": "...", "confidence": "high|medium|low", "sources": []}],\n'
+        '  "open_questions": ["any unresolved items"],\n'
+        '  "files_produced": ["list of files"],\n'
+        '  "reassignments": [\n'
+        '    {"member": "member_name", "instruction": "Redo X because Y", "priority": 1}\n'
+        "  ]\n"
+        "}\n"
+        "```\n"
+        "If quality is acceptable, omit `reassignments` (or set it to `[]`).\n"
+        "If you need members to redo work, include `reassignments` and they "
+        "will be executed before your output is finalized."
+    )
+
+    return "\n".join(p for p in parts if p)
+
+
+def build_planning_task(
+    task_description: str,
+    predecessor_summaries: list[str],
+    workspace_files: list[str] | None = None,
+) -> str:
+    """Build the task prompt for the manager's planning round."""
+    parts = [task_description]
+
+    if predecessor_summaries:
+        parts.append("\n## Context from predecessor tasks")
+        for summary in predecessor_summaries:
+            parts.append(f"- {summary}")
+
+    if workspace_files:
+        parts.append("\n## Available files in workspace")
+        parts.append("These files were produced by predecessor tasks and are "
+                      "available for you and your team members to read:")
+        for f in workspace_files[:50]:  # cap at 50 to avoid prompt bloat
+            parts.append(f"  - {f}")
+
+    parts.append(
+        "\n## Instructions\n"
+        "DO NOT do the work yourself. DO NOT search the web or run commands.\n"
+        "Create the file `assignment_plan.json` with your delegation plan.\n"
+        "Decide which team members should handle which parts of the work.\n"
+        "Give each member specific, detailed instructions including the "
+        "full file paths they need to read.\n"
+        "Then create `manifest.json` summarizing your plan."
+    )
+
+    return "\n".join(parts)
+
+
+def build_review_task(
+    original_task: str,
+    member_results: dict[str, dict[str, Any]],
+) -> str:
+    """Build the task prompt for the manager's review round.
+
+    ``member_results`` maps member name → their manifest/output dict.
+    """
+    parts = [
+        f"## Original Task\n{original_task}",
+        "\n## Member Results",
+    ]
+
+    for member_name, result in member_results.items():
+        summary = result.get("summary", "(no summary)")
+        findings = result.get("findings", [])
+        parts.append(f"\n### {member_name}")
+        parts.append(f"Summary: {summary}")
+        if findings:
+            parts.append("Findings:")
+            for f in findings:
+                if isinstance(f, dict):
+                    conf = f.get("confidence", "?")
+                    parts.append(f"  - [{conf}] {f.get('finding', '')}")
+
+    parts.append(
+        "\n## Instructions\n"
+        "Review the member results above. Then create `manifest.json` with your "
+        "consolidated output. If any member's work needs revision, include "
+        "`reassignments` in the manifest."
+    )
+
+    return "\n".join(parts)
+
+
+def parse_assignment_plan(text: str) -> ManagerPlan:
+    """Parse the manager's assignment plan from its text output.
+
+    Looks for a JSON block in ```json fences, or tries to parse the whole
+    text as JSON.  Returns a ManagerPlan with assignments extracted.
+    """
+    json_str = _extract_json_block(text)
+    if json_str is None:
+        # Try the whole text as JSON
+        json_str = text.strip()
+
+    try:
+        data = json.loads(json_str)
+    except (json.JSONDecodeError, ValueError):
+        # Manager didn't produce valid JSON — return empty plan
+        return ManagerPlan(reasoning=f"Could not parse plan from manager output: {text[:200]}")
+
+    assignments = []
+    for a in data.get("assignments", []):
+        if isinstance(a, dict) and "member" in a and "instruction" in a:
+            assignments.append(MemberAssignment(
+                member=a["member"],
+                instruction=a["instruction"],
+                priority=a.get("priority", 0),
+            ))
+
+    # Sort by priority descending (higher = first)
+    assignments.sort(key=lambda x: -x.priority)
+
+    return ManagerPlan(
+        assignments=assignments,
+        reasoning=data.get("reasoning", ""),
+        needs_human_input=data.get("needs_human_input", False),
+        human_question=data.get("human_question", ""),
+    )
+
+
+def parse_reassignments(manifest: dict[str, Any]) -> list[MemberAssignment]:
+    """Extract reassignment requests from the manager's review manifest."""
+    reassignments = []
+    for a in manifest.get("reassignments", []):
+        if isinstance(a, dict) and "member" in a and "instruction" in a:
+            reassignments.append(MemberAssignment(
+                member=a["member"],
+                instruction=a["instruction"],
+                priority=a.get("priority", 0),
+            ))
+    reassignments.sort(key=lambda x: -x.priority)
+    return reassignments
+
+
+def write_member_results(
+    workspace: Path,
+    member_results: dict[str, dict[str, Any]],
+) -> None:
+    """Write member results to workspace so the manager can see them."""
+    results_dir = workspace / ".team_results"
+    results_dir.mkdir(exist_ok=True)
+    for member_name, result in member_results.items():
+        path = results_dir / f"{member_name}.json"
+        path.write_text(json.dumps(result, indent=2, default=str))
+
+
+def _extract_json_block(text: str) -> str | None:
+    """Extract the first ```json ... ``` block from text."""
+    start = text.find("```json")
+    if start == -1:
+        # Try plain ``` block
+        start = text.find("```\n{")
+        if start == -1:
+            return None
+        start += 4  # skip ```\n
+    else:
+        start += 7  # skip ```json
+        # Skip optional newline after ```json
+        if start < len(text) and text[start] == "\n":
+            start += 1
+
+    end = text.find("```", start)
+    if end == -1:
+        return None
+
+    return text[start:end].strip()

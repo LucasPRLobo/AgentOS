@@ -81,6 +81,8 @@ class WorkflowSnapshot:
 
     errors: list[dict] = field(default_factory=list)
 
+    task_definitions: dict = field(default_factory=dict)
+
     @property
     def succeeded_tasks(self) -> list[str]:
         return [n for n, t in self.tasks.items() if t.state == TaskStatus.SUCCEEDED]
@@ -100,6 +102,10 @@ class WorkflowSnapshot:
     @property
     def pending_tasks(self) -> list[str]:
         return [n for n, t in self.tasks.items() if t.state == TaskStatus.PENDING]
+
+    @property
+    def skipped_tasks(self) -> list[str]:
+        return [n for n, t in self.tasks.items() if t.state == TaskStatus.SKIPPED]
 
     @property
     def total_cost(self) -> float:
@@ -167,6 +173,11 @@ class WorkflowReplayer:
             EventType.CAPABILITY_DENIED: self._on_noop,
             EventType.FILE_CREATED: self._on_noop,
             EventType.FILE_MODIFIED: self._on_noop,
+            EventType.BRANCH_EVALUATED: self._on_noop,
+            EventType.TASK_RETRIED: self._on_noop,
+            EventType.REVISION_FEEDBACK: self._on_noop,
+            EventType.MESSAGE_SENT: self._on_noop,
+            EventType.MESSAGE_RECEIVED: self._on_noop,
             EventType.ERROR_OCCURRED: self._on_error,
         }
         handler = handlers.get(event.event_type, self._on_noop)
@@ -179,6 +190,7 @@ class WorkflowReplayer:
         snap.workflow_name = event.payload.get("workflow_name", "")
         snap.task_count = event.payload.get("task_count", 0)
         snap.started_at = event.timestamp
+        snap.task_definitions = event.payload.get("tasks", {})
 
     @staticmethod
     def _on_workflow_completed(event: Event, snap: WorkflowSnapshot) -> None:

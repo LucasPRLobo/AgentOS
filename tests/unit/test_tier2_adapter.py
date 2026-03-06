@@ -20,6 +20,7 @@ from agentos.adapters.tier2_claude_code import (
     _build_command,
     _build_env,
     _build_prompt,
+    _extract_tool_names,
     _manifest_to_task_output,
     _parse_manifest,
     _parse_usage,
@@ -162,9 +163,12 @@ class TestBuildCommand:
         idx = cmd.index("--allowedTools")
         assert cmd[idx + 1] == "Read,Write"
 
-    def test_empty_tools_no_flag(self):
+    def test_empty_tools_gets_safe_baseline(self):
+        """When no tools are specified, a safe baseline is enforced."""
         cmd = _build_command("Task", [])
-        assert "--allowedTools" not in cmd
+        assert "--allowedTools" in cmd
+        idx = cmd.index("--allowedTools")
+        assert cmd[idx + 1] == "Read,Write,Edit,Glob,Grep"
 
 
 # ---------------------------------------------------------------------------
@@ -527,3 +531,40 @@ class TestClaudeCodeAdapterProperties:
     def test_tier_is_2(self, budget_manager):
         adapter = ClaudeCodeAdapter(budget_manager, "agent1")
         assert adapter.tier == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests: Tool extraction from stream events
+# ---------------------------------------------------------------------------
+
+class TestExtractToolNames:
+    def test_extracts_tool_use_names(self):
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": "/foo"}},
+                    {"type": "text", "text": "thinking..."},
+                ]
+            }
+        }
+        tools = _extract_tool_names(event)
+        assert tools == ["Bash", "Read"]
+
+    def test_non_assistant_event(self):
+        event = {"type": "result", "data": {}}
+        assert _extract_tool_names(event) == []
+
+    def test_no_tool_use(self):
+        event = {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "hello"}]}
+        }
+        assert _extract_tool_names(event) == []
+
+
+class TestToolTracking:
+    def test_last_tools_used_initialized_empty(self, budget_manager):
+        adapter = ClaudeCodeAdapter(budget_manager, "agent1")
+        assert adapter.last_tools_used == set()

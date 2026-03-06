@@ -1,0 +1,170 @@
+# Market Research — Two-Team Inter-Team Communication
+#
+# Demonstrates two teams communicating through channels.
+# The research team gathers data, publishes to a channel.
+# The editorial team subscribes, writes and fact-checks the report.
+#
+# DAG structure:
+#
+#   define_scope (input_gate — stakeholder sets research scope)
+#         │
+#   gather_research (research_lead manages: market_analyst, competitor_analyst)
+#         │                               publishes to → research_to_editorial
+#   write_report (editor_in_chief manages: writer, fact_checker)
+#         │                               subscribes to ← research_to_editorial
+#   stakeholder_review (approval_gate)
+#
+
+name: market_research
+version: "1.0"
+
+budget:
+  max_tokens: 300000
+  max_api_calls: 150
+  max_cost_usd: 8.00
+  max_time_seconds: 2400
+  max_concurrent_tasks: 3
+
+teams:
+  research_team:
+    manager: research_lead
+    members:
+      - market_analyst
+      - competitor_analyst
+    description: >
+      Conducts primary and secondary market research including market sizing,
+      trend analysis, and competitive landscape assessment.
+    human_input: true
+
+  editorial_team:
+    manager: editor_in_chief
+    members:
+      - writer
+      - fact_checker
+    description: >
+      Transforms raw research into polished, accurate reports suitable for
+      executive stakeholders. Ensures factual accuracy and clear presentation.
+
+channels:
+  research_to_editorial:
+    name: research_to_editorial
+    mode: broadcast
+
+agents:
+  research_lead:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are a research director leading a market research team. You break down
+      research objectives into specific analyst tasks, ensure methodological rigor,
+      and synthesize findings into actionable insights. Ask the stakeholder for
+      clarification on scope or priorities when needed.
+    budget:
+      max_tokens: 60000
+      max_cost_usd: 1.50
+
+  market_analyst:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are a market analyst specializing in market sizing, segmentation, and
+      trend analysis. You use both top-down and bottom-up approaches to estimate
+      market opportunities and identify growth drivers.
+    budget:
+      max_tokens: 50000
+      max_cost_usd: 1.25
+
+  competitor_analyst:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are a competitive intelligence analyst. You profile key competitors,
+      analyze their strategies, strengths, weaknesses, and market positioning.
+      You identify competitive threats and opportunities.
+    budget:
+      max_tokens: 50000
+      max_cost_usd: 1.25
+
+  editor_in_chief:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are an editor-in-chief for research publications. You assign writing
+      and fact-checking tasks, review drafts for clarity and accuracy, and ensure
+      the final report meets executive-level quality standards.
+    budget:
+      max_tokens: 50000
+      max_cost_usd: 1.25
+
+  writer:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are a business writer specializing in research reports. You transform
+      raw data and analyst findings into clear, compelling narratives with
+      executive summaries, charts descriptions, and actionable recommendations.
+    budget:
+      max_tokens: 50000
+      max_cost_usd: 1.25
+
+  fact_checker:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: >
+      You are a fact checker for research reports. You verify claims against
+      sources, check statistical accuracy, flag unsupported assertions, and
+      ensure all citations are valid.
+    budget:
+      max_tokens: 30000
+      max_cost_usd: 0.75
+
+tasks:
+  define_scope:
+    name: define_scope
+    type: input_gate
+    description: "Stakeholder defines research scope and objectives"
+    prompt: >
+      Please define the market research scope:
+      - Target market or industry
+      - Key questions to answer
+      - Geographic focus
+      - Time horizon
+      - Specific competitors to analyze
+
+  gather_research:
+    name: gather_research
+    type: agent_task
+    agent: research_lead
+    description: >
+      Lead the research team to gather comprehensive market data and
+      competitive intelligence. Assign specific research tasks to analysts,
+      review their findings, and produce a consolidated research package.
+    depends_on:
+      - define_scope
+    workspace: research
+    publishes_to:
+      - research_to_editorial
+
+  write_report:
+    name: write_report
+    type: agent_task
+    agent: editor_in_chief
+    description: >
+      Lead the editorial team to produce a polished market research report.
+      Assign writing and fact-checking tasks based on the research findings.
+      Ensure accuracy, clarity, and executive-ready presentation.
+    depends_on:
+      - gather_research
+    workspace: editorial
+    subscribes_to:
+      - research_to_editorial
+
+  stakeholder_review:
+    name: stakeholder_review
+    type: approval_gate
+    description: "Stakeholder reviews the final report"
+    prompt: >
+      Review the market research report. Does it address your questions
+      and meet quality standards? Approve or provide feedback.
+    depends_on:
+      - write_report
