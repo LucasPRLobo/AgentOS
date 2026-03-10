@@ -1,0 +1,70 @@
+name: hedge_fund_analysis
+version: "1.0"
+
+budget:
+  max_tokens: 100000
+  max_cost_usd: 5.00
+  max_concurrent_tasks: 3
+
+agents:
+  market_researcher:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: "You are a financial market researcher specializing in equity analysis."
+    tools: [file_read, file_write, web_search]
+    budget:
+      max_tokens: 30000
+      max_cost_usd: 1.50
+
+  macro_analyst:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: "You are a macroeconomic analyst. Analyze economic indicators and their market impact."
+    tools: [file_read, file_write, web_search]
+    budget:
+      max_tokens: 30000
+      max_cost_usd: 1.50
+
+  strategist:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: "You are an investment strategist. Synthesize research into actionable investment recommendations."
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 30000
+      max_cost_usd: 1.50
+
+tasks:
+  market_research:
+    name: market_research
+    description: "Research current market conditions for ${ticker}. Analyze recent price action, earnings, competitive position, and analyst consensus. Focus on data from the last 3 months."
+    agent: market_researcher
+    workspace: shared
+
+  macro_analysis:
+    name: macro_analysis
+    description: "Analyze the current macroeconomic environment relevant to ${sector}. Cover interest rates, inflation, GDP trends, and sector-specific regulatory changes."
+    agent: macro_analyst
+    workspace: shared
+
+  risk_review:
+    name: risk_review
+    description: "Review the research and macro analysis before investment recommendation."
+    type: approval_gate
+    prompt: "Review the market research and macro analysis. Approve to generate investment recommendation, or reject if more research is needed."
+    depends_on: [market_research, macro_analysis]
+
+  investment_recommendation:
+    name: investment_recommendation
+    description: "Synthesize the market research and macroeconomic analysis into a clear investment recommendation for ${ticker}. Include: position (long/short/hold), conviction level (1-10), key catalysts, risk factors, and suggested position size as percentage of portfolio."
+    agent: strategist
+    workspace: shared
+    depends_on: [risk_review]
+
+parameters:
+  ticker:
+    description: "Stock ticker symbol to analyze"
+    default: "AAPL"
+  sector:
+    description: "Market sector for macro analysis"
+    default: "technology"

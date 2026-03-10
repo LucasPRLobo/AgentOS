@@ -1,0 +1,89 @@
+# One → three parallel → gate → merge
+name: fanout_review
+version: "1.0"
+
+budget:
+  max_tokens: 120000
+  max_cost_usd: 5.00
+
+agents:
+  planner:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Break down the project into implementation tasks."
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 15000
+
+  dev_a:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Implement the data layer."
+    tools: [file_read, file_write, shell_exec]
+    budget:
+      max_tokens: 30000
+
+  dev_b:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Implement the API layer."
+    tools: [file_read, file_write, shell_exec]
+    budget:
+      max_tokens: 30000
+
+  dev_c:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Implement the CLI interface."
+    tools: [file_read, file_write, shell_exec]
+    budget:
+      max_tokens: 30000
+
+  integrator:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Integrate all components and run final tests."
+    tools: [file_read, file_write, shell_exec]
+    budget:
+      max_tokens: 15000
+
+tasks:
+  plan:
+    name: plan
+    agent: planner
+    description: "Create an implementation plan with clear task boundaries."
+    workspace: shared
+
+  data_layer:
+    name: data_layer
+    agent: dev_a
+    description: "Implement data models and database layer per the plan."
+    depends_on: [plan]
+    workspace: shared
+
+  api_layer:
+    name: api_layer
+    agent: dev_b
+    description: "Implement REST API endpoints per the plan."
+    depends_on: [plan]
+    workspace: shared
+
+  cli_layer:
+    name: cli_layer
+    agent: dev_c
+    description: "Implement CLI commands per the plan."
+    depends_on: [plan]
+    workspace: shared
+
+  review_gate:
+    name: review_gate
+    type: approval_gate
+    depends_on: [data_layer, api_layer, cli_layer]
+    prompt: "Review all three implementations before integration."
+
+  integration:
+    name: integration
+    agent: integrator
+    description: "Wire components together, fix integration issues, run tests."
+    depends_on: [review_gate]
+    workspace: shared

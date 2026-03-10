@@ -1,0 +1,52 @@
+name: news_digest
+version: "1.0"
+
+budget:
+  max_tokens: 50000
+  max_cost_usd: 2.00
+  max_concurrent_tasks: 2
+
+agents:
+  researcher:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: "You are a news researcher. Find and summarize the latest developments on the given topic."
+    tools: [file_read, file_write, web_search]
+    budget:
+      max_tokens: 20000
+      max_cost_usd: 0.80
+
+  analyst:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: "You are a news analyst. Analyze research findings and produce actionable insights."
+    tools: [file_read, file_write]
+    budget:
+      max_tokens: 20000
+      max_cost_usd: 0.80
+
+tasks:
+  gather_news:
+    name: gather_news
+    description: "Research the latest news about ${topic}. Find at least 5 recent articles or developments. Summarize each with source, date, and key points."
+    agent: researcher
+    workspace: shared
+
+  review_gate:
+    name: review_gate
+    description: "Review the research findings before analysis."
+    type: approval_gate
+    prompt: "Review the gathered news. Approve to proceed with analysis, or reject to re-research."
+    depends_on: [gather_news]
+
+  analyze_trends:
+    name: analyze_trends
+    description: "Analyze the research findings from the news gathering phase. Identify trends, connections between stories, and potential implications. Produce a structured analysis with confidence ratings."
+    agent: analyst
+    workspace: shared
+    depends_on: [review_gate]
+
+parameters:
+  topic:
+    description: "News topic to research"
+    default: "artificial intelligence regulation"

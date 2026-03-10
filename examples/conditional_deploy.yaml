@@ -1,0 +1,55 @@
+# Conditional branching: run tests → deploy if passed, fix if failed
+name: conditional_deploy
+version: "1.0"
+
+budget:
+  max_tokens: 80000
+  max_cost_usd: 3.00
+
+agents:
+  developer:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Run tests and report results."
+    tools: [shell_exec, file_read]
+    budget:
+      max_tokens: 20000
+
+  deployer:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Deploy the application."
+    tools: [shell_exec, file_write]
+    budget:
+      max_tokens: 20000
+
+  fixer:
+    adapter: tier1
+    model: claude-sonnet-4-6
+    role: "Fix failing tests."
+    tools: [file_read, file_write, shell_exec]
+    budget:
+      max_tokens: 30000
+
+tasks:
+  run_tests:
+    name: run_tests
+    agent: developer
+    description: "Run the test suite and report pass/fail status."
+    conditions:
+      - target: deploy
+        expression: "'passed' in summary.lower()"
+      - target: fix_code
+        expression: "'fail' in summary.lower()"
+
+  deploy:
+    name: deploy
+    agent: deployer
+    description: "Deploy the application to staging."
+    depends_on: [run_tests]
+
+  fix_code:
+    name: fix_code
+    agent: fixer
+    description: "Fix the failing tests based on test output."
+    depends_on: [run_tests]
