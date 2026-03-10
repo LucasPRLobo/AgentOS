@@ -22,7 +22,7 @@ Most "multi-agent" frameworks chain API calls. AgentOS orchestrates actual agent
 ### 1. Install AgentOS
 
 ```bash
-git clone https://github.com/lucaslobo/AgentOS.git
+git clone https://github.com/LucasPRLobo/AgentOS.git
 cd AgentOS
 pip install -e ".[dev]"
 ```
