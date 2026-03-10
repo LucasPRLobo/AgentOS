@@ -15,9 +15,12 @@ structured result summaries fed back into its prompt.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from agentos.adapters.base import AgentAdapter
 from agentos.adapters.manager_agent import (
@@ -269,7 +272,7 @@ class ManagerAgentAdapter(AgentAdapter):
                             content=member_results[assignment.member],
                         )
                     except Exception:
-                        pass
+                        logger.debug("Failed to publish to team channel for member %s", assignment.member, exc_info=True)
 
             # Write member results to workspace so manager can see files
             write_member_results(workspace, member_results)

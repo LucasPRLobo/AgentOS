@@ -32,3 +32,54 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend dependencies
+node_modules/
+package-lock.json
+
+# Environment
+.env
+.env.*
+
+# Excluded from release
+v0/
+spikes/
+agentos/marketplace/
+agentos/dashboard/frontend/
+
+# Internal docs (not for public release)
+docs/EXPLICACAO_PROJETO.*
+docs/demo_hedge_fund_ptbr.*
+docs/INVESTOR_DEMO_REPORT.md
+docs/SANDBOX_FIX.md
+docs/V2_DEVELOPMENT_PLAN.md
+docs/IMPLEMENTATION_STATUS.md
+docs/suggested_dev_plan.md
+docs/WEEK0_SPIKE_FINDINGS.md
+docs/REVIEW_BRIEF.md
+docs/HEDGE_FUND_RUN_ANALYSIS.md
+docs/FRAMEWORK_EVALUATION.md
+docs/PROJECT_OVERVIEW.md
+docs/DEVELOPMENT_PLAN.md
+docs/GTM_STRATEGY.md
+docs/V1_SCOPE.md
+
+# Excluded examples
+examples/parallel_analysis.yaml
+examples/hedge_fund_research.yaml
+examples/market_research.yaml
+examples/news_aggregator.yaml
+examples/quant_research.yaml
+examples/event_planning.yaml
+examples/devops_pipeline.yaml
+examples/collaborative_feature_dev.yaml
+examples/collaborative_routing.yaml
+examples/research_with_consultation.yaml
+examples/code_review_loop.yaml
+examples/aider_code_review.yaml
+examples/test_pipeline.yaml

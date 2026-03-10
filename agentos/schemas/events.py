@@ -32,10 +32,13 @@ class EventType(StrEnum):
     # Agent lifecycle
     AGENT_SPAWNED = "agent.spawned"
     AGENT_TERMINATED = "agent.terminated"
+    AGENT_TOOL_CALL = "agent.tool_call"
+    AGENT_TEXT_OUTPUT = "agent.text_output"
 
     # Gates
     GATE_WAITING = "gate.waiting"
     GATE_RESOLVED = "gate.resolved"
+    HUMAN_INPUT_PROVIDED = "human.input_provided"
 
     # Budget
     BUDGET_CONSUMED = "budget.consumed"
@@ -96,6 +99,9 @@ class EventType(StrEnum):
 
     # Errors
     ERROR_OCCURRED = "error.occurred"
+
+    # Manifest fallback
+    MANIFEST_INFERRED = "manifest.inferred"
 
 
 class Event(BaseModel):

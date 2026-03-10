@@ -9,6 +9,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from agentos.schemas.task import TaskOutput
 
+ADAPTER_API_VERSION = "1.0"
+
 
 @runtime_checkable
 class ProgressCallback(Protocol):
@@ -63,3 +65,33 @@ class AgentAdapter(ABC):
     @abstractmethod
     async def terminate(self) -> None:
         """Stop the agent cleanly."""
+
+
+def validate_adapter(adapter: Any) -> list[str]:
+    """Validate that an object implements the AgentAdapter interface correctly.
+
+    Returns a list of issues found. Empty list means the adapter is valid.
+    """
+    issues = []
+
+    if not isinstance(adapter, AgentAdapter):
+        issues.append("Adapter must extend AgentAdapter ABC")
+        return issues
+
+    # Check tier property
+    try:
+        tier = adapter.tier
+        if tier not in (1, 2, 3):
+            issues.append(f"tier must be 1, 2, or 3, got {tier}")
+    except Exception:
+        issues.append("tier property raised an exception")
+
+    # Check execute_task is implemented (not abstract)
+    if getattr(adapter.execute_task, "__isabstractmethod__", False):
+        issues.append("execute_task() is not implemented")
+
+    # Check terminate is implemented (not abstract)
+    if getattr(adapter.terminate, "__isabstractmethod__", False):
+        issues.append("terminate() is not implemented")
+
+    return issues

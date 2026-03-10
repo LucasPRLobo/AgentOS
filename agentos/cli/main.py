@@ -151,6 +151,32 @@ def audit(yaml_file: str) -> None:
         click.echo(f"Total findings: {total_findings}")
 
 
+@cli.command(name="compliance-report")
+@click.argument("workflow_id")
+@click.option("--db", required=True, help="SQLite database path with workflow events")
+@click.option("--format", "fmt", default="json", type=click.Choice(["json", "html"]),
+              help="Output format")
+@click.option("--output", "-o", default=None, help="Output file path (default: stdout)")
+def compliance_report(workflow_id: str, db: str, fmt: str, output: str | None) -> None:
+    """Generate a compliance/audit report for a completed workflow."""
+    from agentos.security.compliance import ComplianceReportGenerator
+
+    event_log = SQLiteEventLog(db)
+    generator = ComplianceReportGenerator(event_log)
+    report = generator.generate(workflow_id)
+
+    if fmt == "html":
+        content = report.to_html()
+    else:
+        content = report.to_json()
+
+    if output:
+        Path(output).write_text(content)
+        click.echo(f"Report written to: {output}")
+    else:
+        click.echo(content)
+
+
 @cli.group()
 def finetune() -> None:
     """Fine-tuning data management."""
@@ -163,7 +189,15 @@ def finetune() -> None:
 @click.option("--output", "-o", default=None, help="Output file path (default: stdout)")
 def finetune_export(db: str, fmt: str, output: str | None) -> None:
     """Export fine-tuning training data from past workflow runs."""
-    from agentos.intelligence.finetune import ExportConfig, ExportFormat, FineTuneExporter
+    try:
+        from agentos.intelligence.finetune import ExportConfig, ExportFormat, FineTuneExporter
+    except ImportError:
+        click.echo(click.style(
+            "Intelligence dependencies not installed.\n"
+            "Install with: pip install agentos[intelligence]",
+            fg="red",
+        ))
+        raise SystemExit(1)
     from agentos.schemas.events import EventType
 
     event_log = SQLiteEventLog(db)
@@ -172,7 +206,7 @@ def finetune_export(db: str, fmt: str, output: str | None) -> None:
     # Extract records from event log
     output_events = event_log.query(event_type=EventType.TASK_OUTPUT_PRODUCED)
 
-    from agentos.intelligence.finetune import TaskRecord
+    from agentos.intelligence.finetune import TaskRecord  # noqa: E811
 
     for event in output_events:
         payload = event.payload
@@ -212,7 +246,15 @@ cli.add_command(finetune)
 @click.option("--db", required=True, help="SQLite database path with workflow history")
 def suggest(db: str) -> None:
     """Show workflow optimization recommendations based on past runs."""
-    from agentos.intelligence.learning import ConfigRecommender, PatternDetector, WorkflowRecord
+    try:
+        from agentos.intelligence.learning import ConfigRecommender, PatternDetector, WorkflowRecord
+    except ImportError:
+        click.echo(click.style(
+            "Intelligence dependencies not installed.\n"
+            "Install with: pip install agentos[intelligence]",
+            fg="red",
+        ))
+        raise SystemExit(1)
 
     event_log = SQLiteEventLog(db)
     detector = PatternDetector()
@@ -271,8 +313,16 @@ def memory() -> None:
 @click.option("--limit", default=10, help="Max results")
 def memory_query(db: str, mem_type: str | None, limit: int) -> None:
     """Query cross-run memories."""
-    from agentos.kernel.memory_store import SQLiteMemoryStore
-    from agentos.schemas.memory import MemoryConfig, MemoryQuery, MemoryType
+    try:
+        from agentos.kernel.memory_store import SQLiteMemoryStore
+        from agentos.schemas.memory import MemoryConfig, MemoryQuery, MemoryType
+    except ImportError:
+        click.echo(click.style(
+            "Memory store dependencies not available.\n"
+            "Ensure the memory module is installed.",
+            fg="red",
+        ))
+        raise SystemExit(1)
 
     store = SQLiteMemoryStore(MemoryConfig(enabled=True), db)
 
@@ -309,7 +359,15 @@ def knowledge() -> None:
 @click.option("--name", "name_pattern", default=None, help="Search by name pattern")
 def knowledge_query(db: str, entity_type: str | None, name_pattern: str | None) -> None:
     """Query knowledge graph entities."""
-    from agentos.intelligence.knowledge_graph import SQLiteKnowledgeGraph
+    try:
+        from agentos.intelligence.knowledge_graph import SQLiteKnowledgeGraph
+    except ImportError:
+        click.echo(click.style(
+            "Intelligence dependencies not installed.\n"
+            "Install with: pip install agentos[intelligence]",
+            fg="red",
+        ))
+        raise SystemExit(1)
 
     kg = SQLiteKnowledgeGraph(db)
     entities = kg.search_entities(entity_type=entity_type, name_pattern=name_pattern)
@@ -341,7 +399,15 @@ def marketplace() -> None:
 @click.option("--verified", is_flag=True, help="Show only verified templates")
 def marketplace_list(db: str, category: str | None, verified: bool) -> None:
     """List marketplace workflow templates."""
-    from agentos.marketplace.registry import MarketplaceRegistry
+    try:
+        from agentos.marketplace.registry import MarketplaceRegistry
+    except ImportError:
+        click.echo(click.style(
+            "Marketplace dependencies not installed.\n"
+            "Install with: pip install agentos[marketplace]",
+            fg="red",
+        ))
+        raise SystemExit(1)
 
     registry = MarketplaceRegistry(db)
     templates = registry.list_templates(category=category, verified_only=verified)
@@ -367,7 +433,15 @@ def marketplace_list(db: str, category: str | None, verified: bool) -> None:
 @click.option("--category", default="general", help="Category")
 def marketplace_publish(yaml_file: str, db: str, name: str, description: str, author: str, category: str) -> None:
     """Publish a workflow YAML as a marketplace template."""
-    from agentos.marketplace.registry import MarketplaceRegistry
+    try:
+        from agentos.marketplace.registry import MarketplaceRegistry
+    except ImportError:
+        click.echo(click.style(
+            "Marketplace dependencies not installed.\n"
+            "Install with: pip install agentos[marketplace]",
+            fg="red",
+        ))
+        raise SystemExit(1)
 
     workflow_yaml = Path(yaml_file).read_text()
     registry = MarketplaceRegistry(db)
@@ -384,7 +458,15 @@ def marketplace_publish(yaml_file: str, db: str, name: str, description: str, au
 @click.option("--db", required=True, help="Marketplace database path")
 def marketplace_import(json_file: str, db: str) -> None:
     """Import a workflow template from JSON."""
-    from agentos.marketplace.registry import MarketplaceRegistry
+    try:
+        from agentos.marketplace.registry import MarketplaceRegistry
+    except ImportError:
+        click.echo(click.style(
+            "Marketplace dependencies not installed.\n"
+            "Install with: pip install agentos[marketplace]",
+            fg="red",
+        ))
+        raise SystemExit(1)
 
     json_data = Path(json_file).read_text()
     registry = MarketplaceRegistry(db)

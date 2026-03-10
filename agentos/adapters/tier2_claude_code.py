@@ -17,10 +17,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentos.adapters.base import AgentAdapter
+from agentos.schemas.agent import ClaudeCodeConfig
 from agentos.adapters.tier2_shared import (
     DEFAULT_TIMEOUT,
     MAX_MANIFEST_RETRIES,
     build_prompt,
+    extract_manifest_from_text,
     manifest_to_task_output,
     parse_manifest,
     write_predecessor_context,
@@ -46,8 +48,13 @@ def _build_command(
     *,
     output_format: str = "json",
     max_turns: int = 30,
+    claude_code_config: ClaudeCodeConfig | None = None,
 ) -> list[str]:
     """Build the claude CLI command."""
+    # Apply max_turns override from config before building command
+    if claude_code_config and claude_code_config.max_turns:
+        max_turns = claude_code_config.max_turns
+
     cmd = [
         "claude",
         "--print",
@@ -57,6 +64,33 @@ def _build_command(
     # stream-json requires --verbose in --print mode
     if output_format == "stream-json":
         cmd.append("--verbose")
+
+    # Permission mode
+    if claude_code_config and claude_code_config.permission_mode:
+        # Block dangerous permission modes — governance platform never bypasses
+        if claude_code_config.permission_mode not in ("bypassPermissions",):
+            cmd.extend(["--permission-mode", claude_code_config.permission_mode])
+
+    # Append system prompt
+    if claude_code_config and claude_code_config.append_system_prompt:
+        cmd.extend(["--append-system-prompt", claude_code_config.append_system_prompt])
+
+    # MCP configuration
+    if claude_code_config and claude_code_config.mcp_config:
+        for mcp in claude_code_config.mcp_config:
+            cmd.extend(["--mcp-config", mcp])
+        if len(claude_code_config.mcp_config) > 0:
+            cmd.append("--strict-mcp-config")
+
+    # Model override
+    if claude_code_config and claude_code_config.model:
+        cmd.extend(["--model", claude_code_config.model])
+
+    # Additional directories
+    if claude_code_config and claude_code_config.add_dirs:
+        for d in claude_code_config.add_dirs:
+            cmd.extend(["--add-dir", d])
+
     cmd.extend(["-p", prompt])
     if allowed_tools:
         cmd.extend(["--allowedTools", ",".join(allowed_tools)])
@@ -65,6 +99,11 @@ def _build_command(
         # Without --allowedTools, Claude Code gives the agent ALL tools
         # including Bash, which violates the governance model.
         cmd.extend(["--allowedTools", "Read,Write,Edit,Glob,Grep"])
+
+    # Disabled slash commands
+    if claude_code_config and claude_code_config.disabled_commands:
+        cmd.extend(["--disallowedCommands", ",".join(claude_code_config.disabled_commands)])
+
     # Always block Agent and TodoWrite — these are Claude Code built-in tools
     # that spawn uncontrolled sub-agents or manage internal state we don't track.
     cmd.extend(["--disallowedTools", "Agent,TodoWrite,ToolSearch"])
@@ -124,6 +163,7 @@ def _run_streaming(
     timeout: int,
     log_fn: Callable[[str], None],
     tools_used: set[str] | None = None,
+    event_emitter: Callable[[dict[str, Any]], None] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run claude CLI with stream-json, streaming events via log_fn.
 
@@ -158,6 +198,9 @@ def _run_streaming(
                 if tools_used is not None:
                     for tool_name in _extract_tool_names(event):
                         tools_used.add(tool_name)
+                # Emit structured events to event log
+                if event_emitter is not None:
+                    event_emitter(event)
                 formatted = _format_stream_event(event)
                 if formatted:
                     log_fn(formatted)
@@ -186,9 +229,22 @@ def _run_streaming(
     return subprocess.CompletedProcess(cmd, proc.returncode, result_json, "")
 
 
+# Environment variables safe to pass to agent subprocesses.
+_ENV_WHITELIST = {
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
+    "TERM", "TMPDIR", "TMP", "TEMP", "XDG_RUNTIME_DIR", "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+    # Claude Code needs its API key to function
+    "ANTHROPIC_API_KEY",
+    # Node.js / Claude Code runtime
+    "NODE_PATH", "NODE_OPTIONS", "npm_config_prefix",
+}
+
+
 def _build_env() -> dict[str, str]:
-    """Build subprocess environment with anti-nesting guard stripped."""
-    env = os.environ.copy()
+    """Build a restricted environment for agent subprocesses."""
+    env = {k: v for k, v in os.environ.items() if k in _ENV_WHITELIST}
+    # Anti-nesting guard: prevent Claude Code from thinking it's inside itself
     env.pop("CLAUDECODE", None)
     return env
 
@@ -255,21 +311,74 @@ class ClaudeCodeAdapter(AgentAdapter):
         run_subprocess: Any | None = None,
         log_fn: Callable[[str], None] | None = None,
         sandbox_handle: Any | None = None,
+        event_log: Any | None = None,
+        seq: Any | None = None,
+        workflow_id: str | None = None,
+        claude_code_config: ClaudeCodeConfig | None = None,
     ) -> None:
         self._budget_manager = budget_manager
         self._agent_id = agent_id
         self._timeout = timeout
         self._max_turns = max_turns
+        self._claude_code_config = claude_code_config
         self._process: subprocess.Popen | None = None
         self._terminated = False
         # Allow injecting a mock for subprocess.run in tests
         self._run_subprocess = run_subprocess or subprocess.run
         self._log_fn = log_fn
         self._sandbox = sandbox_handle
+        # Event log integration for dashboard streaming
+        self._event_log = event_log
+        self._seq = seq
+        self._workflow_id = workflow_id
         # Stream events only when log_fn is set and no mock is injected
         self._use_streaming = log_fn is not None and run_subprocess is None
         # Tracks tools the agent actually used (populated during streaming)
         self.last_tools_used: set[str] = set()
+
+    def _make_event_emitter(self, task_id: str) -> Callable[[dict[str, Any]], None] | None:
+        """Build a callback that emits AGENT_TOOL_CALL / AGENT_TEXT_OUTPUT events."""
+        if self._event_log is None or self._seq is None or self._workflow_id is None:
+            return None
+
+        from agentos.schemas.events import Event, EventType
+
+        def emitter(stream_event: dict[str, Any]) -> None:
+            etype = stream_event.get("type", "")
+            if etype != "assistant":
+                return
+            for block in stream_event.get("message", {}).get("content", []):
+                btype = block.get("type", "")
+                if btype == "tool_use":
+                    name = block.get("name", "")
+                    inp = block.get("input", {})
+                    summary = json.dumps(inp)[:200] if inp else ""
+                    self._event_log.append(Event(
+                        event_type=EventType.AGENT_TOOL_CALL,
+                        workflow_id=self._workflow_id,
+                        seq=self._seq.next(),
+                        payload={
+                            "agent_id": self._agent_id,
+                            "task_id": task_id,
+                            "tool_name": name,
+                            "tool_input_summary": summary,
+                        },
+                    ))
+                elif btype == "text":
+                    text = block.get("text", "").strip()
+                    if text:
+                        self._event_log.append(Event(
+                            event_type=EventType.AGENT_TEXT_OUTPUT,
+                            workflow_id=self._workflow_id,
+                            seq=self._seq.next(),
+                            payload={
+                                "agent_id": self._agent_id,
+                                "task_id": task_id,
+                                "text_preview": text[:200],
+                            },
+                        ))
+
+        return emitter
 
     async def execute_task(
         self,
@@ -307,14 +416,17 @@ class ClaudeCodeAdapter(AgentAdapter):
         )
         out_fmt = "stream-json" if self._use_streaming else "json"
         cmd = _build_command(prompt, allowed_tools, output_format=out_fmt,
-                             max_turns=self._max_turns)
+                             max_turns=self._max_turns,
+                             claude_code_config=self._claude_code_config)
         env = _build_env()
 
         total_tokens = 0
         total_cost = 0.0
         api_calls = 0
         raw_output: dict[str, Any] = {}
+        raw_text_output: str = ""
         self.last_tools_used = set()
+        event_emitter = self._make_event_emitter(task_id="")
 
         # Run with retries for manifest validation
         for attempt in range(1 + MAX_MANIFEST_RETRIES):
@@ -336,6 +448,7 @@ class ClaudeCodeAdapter(AgentAdapter):
                         cmd, str(workspace), env,
                         self._timeout, self._log_fn,
                         tools_used=self.last_tools_used,
+                        event_emitter=event_emitter,
                     )
                 else:
                     result = self._run_subprocess(
@@ -359,6 +472,7 @@ class ClaudeCodeAdapter(AgentAdapter):
                 )
 
             api_calls += 1
+            raw_text_output = result.stdout or ""
 
             # Parse JSON output for usage metrics
             try:
@@ -417,21 +531,33 @@ class ClaudeCodeAdapter(AgentAdapter):
                     allowed_tools,
                     output_format=out_fmt,
                     max_turns=self._max_turns,
+                    claude_code_config=self._claude_code_config,
                 )
 
-        # All retries exhausted
+        # All retries exhausted — try fallback extraction from raw output
         elapsed = time.monotonic() - start_time
+        metrics = TaskMetrics(
+            tokens_consumed=total_tokens,
+            api_calls_made=api_calls,
+            execution_time_seconds=round(elapsed, 2),
+            estimated_cost_usd=total_cost,
+        )
+
+        if raw_text_output:
+            inferred = extract_manifest_from_text(raw_text_output)
+            if inferred is not None:
+                output = manifest_to_task_output(
+                    inferred, task_id="", agent_id=self._agent_id, metrics=metrics,
+                )
+                output.summary = f"[inferred manifest] {output.summary}"
+                return output
+
         return TaskOutput(
             task_id="",
             agent_id=self._agent_id,
             status=TaskStatus.FAILED,
             summary="Agent did not produce a valid manifest.json after retries.",
-            metrics=TaskMetrics(
-                tokens_consumed=total_tokens,
-                api_calls_made=api_calls,
-                execution_time_seconds=round(elapsed, 2),
-                estimated_cost_usd=total_cost,
-            ),
+            metrics=metrics,
         )
 
     async def terminate(self) -> None:

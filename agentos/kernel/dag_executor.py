@@ -14,7 +14,8 @@ from agentos.kernel.event_log import EventLog
 from agentos.kernel.seq import SeqCounter
 from agentos.kernel.state_machine import TaskStateMachine
 from agentos.schemas.events import Event, EventType
-from agentos.schemas.task import TaskConfig, TaskOutput, TaskStatus
+from agentos.kernel.workspace import Workspace
+from agentos.schemas.task import TaskConfig, TaskMetrics, TaskOutput, TaskStatus
 from agentos.schemas.workflow import WorkflowDefinition
 
 if TYPE_CHECKING:
@@ -78,6 +79,7 @@ class DAGExecutor:
         budget_manager: BudgetManager,
         task_executor: TaskExecutorFn,
         context: ExecutionContext | None = None,
+        workspace: Workspace | None = None,
     ) -> None:
         self._workflow = workflow
         self._event_log = event_log
@@ -87,6 +89,7 @@ class DAGExecutor:
         self._state_machine = TaskStateMachine(event_log, seq, workflow_id="")
         self._iteration_counts: dict[str, int] = {}  # task_name → current iteration
         self._ctx = context or ExecutionContext()
+        self._workspace = workspace
 
         # MutableDAG for runtime task insertion (populated in run/resume)
         self._dag: Any = None  # lazy import to avoid circular deps
@@ -179,6 +182,33 @@ class DAGExecutor:
                             name, TaskStatus.RUNNING, TaskStatus.SUCCEEDED
                         )
                         task_states[name] = TaskStatus.SUCCEEDED
+
+                        # Propagate gate feedback as TaskOutput for downstream tasks
+                        from agentos.kernel.gate_manager import GateManager
+                        gate_mgr = GateManager(self._event_log, self._seq, workflow_id)
+                        gate_state = gate_mgr.get_gate(gid)
+                        if gate_state and gate_state.feedback:
+                            gate_output = TaskOutput(
+                                task_id=name,
+                                agent_id="human",
+                                status=TaskStatus.SUCCEEDED,
+                                summary=gate_state.feedback,
+                                metrics=TaskMetrics(tokens_consumed=0, api_calls_made=0, execution_time_seconds=0),
+                            )
+                            task_outputs[name] = gate_output
+                            self._emit_task_output(workflow_id, name, gate_output)
+                            # Emit HUMAN_INPUT_PROVIDED event
+                            self._event_log.append(Event(
+                                event_type=EventType.HUMAN_INPUT_PROVIDED,
+                                workflow_id=workflow_id,
+                                seq=self._seq.next(),
+                                payload={
+                                    "gate_id": gid,
+                                    "task_id": name,
+                                    "feedback": gate_state.feedback,
+                                    "reviewer": gate_state.reviewer or "",
+                                },
+                            ))
                     break
 
         # Build result from current state
@@ -302,6 +332,7 @@ class DAGExecutor:
                     try:
                         status, output = future.result()
                     except Exception:
+                        logger.warning("Task %s raised an exception", name, exc_info=True)
                         status = TaskStatus.FAILED
                         output = None
 
@@ -378,6 +409,11 @@ class DAGExecutor:
                 self._dispatch_ready(tasks, task_states, task_outputs, pool, active)
 
         result.task_outputs = task_outputs
+
+        # Garbage collect failed task workspaces
+        if self._workspace and result.failed_tasks:
+            self._workspace.garbage_collect(set(result.failed_tasks))
+
         return result
 
     def _dispatch_ready(
@@ -541,6 +577,7 @@ class DAGExecutor:
         try:
             memories = self._ctx.memory_store.query(MemoryQuery(limit=5))
         except Exception:
+            logger.debug("Memory query failed, skipping memory injection", exc_info=True)
             return predecessor_context
 
         if not memories:

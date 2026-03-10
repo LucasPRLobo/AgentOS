@@ -115,6 +115,31 @@ def reject_gate(gate_id: str, db: str, reviewer: str, feedback: str | None) -> N
         raise SystemExit(1)
 
 
+@gate.command("respond")
+@click.argument("gate_id")
+@click.option("--message", "-m", required=True, help="Input message to provide to the gate")
+@click.option("--db", required=True, type=click.Path(exists=True), help="SQLite database path")
+@click.option("--reviewer", default="cli-user", help="Reviewer name")
+def respond_gate(gate_id: str, message: str, db: str, reviewer: str) -> None:
+    """Provide input to an input gate (resolves it with the message)."""
+    event_log = SQLiteEventLog(db)
+    seq = _resume_seq(event_log)
+
+    wf_id = _find_gate_workflow(event_log, gate_id)
+    if wf_id is None:
+        click.echo(click.style(f"Gate not found: {gate_id}", fg="red"))
+        raise SystemExit(1)
+
+    mgr = GateManager(event_log, seq, wf_id)
+    try:
+        mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer, feedback=message)
+        click.echo(click.style(f"Input provided to gate {gate_id}.", fg="green"))
+        click.echo(f"  Message: {message[:100]}{'...' if len(message) > 100 else ''}")
+    except GateError as exc:
+        click.echo(click.style(str(exc), fg="red"))
+        raise SystemExit(1)
+
+
 def _get_workflow_ids(event_log: SQLiteEventLog, workflow_id: str | None) -> list[str]:
     """Get workflow IDs, either the specified one or all from the DB."""
     from agentos.schemas.events import EventType

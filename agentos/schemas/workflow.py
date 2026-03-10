@@ -13,6 +13,14 @@ from agentos.schemas.task import TaskConfig
 from agentos.schemas.team import TeamConfig
 
 
+class WorkflowParameter(BaseModel):
+    """A workflow input parameter."""
+
+    description: str = ""
+    default: str | None = None
+    required: bool = True
+
+
 class WorkflowDefinition(BaseModel):
     """Complete workflow parsed from YAML."""
 
@@ -29,4 +37,8 @@ class WorkflowDefinition(BaseModel):
     )
     archetypes: dict[str, AgentArchetype] = Field(
         default_factory=dict, description="Agent archetypes for dynamic spawning",
+    )
+    parameters: dict[str, WorkflowParameter] = Field(
+        default_factory=dict,
+        description="Input parameters that can be provided at runtime via --param",
     )

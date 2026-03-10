@@ -1,0 +1,31 @@
+name: code-review-pipeline
+version: "1.0"
+agents:
+  reviewer:
+    name: Code Reviewer
+    adapter: tier2_claude_code
+    role: Review the codebase for bugs, security issues, and code quality problems
+    tools: [file_read, file_write]
+    budget: {max_tokens: 80000, max_cost_usd: 1.5}
+  fixer:
+    name: Code Fixer
+    adapter: tier2_claude_code
+    role: Fix the issues identified by the reviewer
+    tools: [file_read, file_write, shell_exec]
+    budget: {max_tokens: 100000, max_cost_usd: 2.0}
+tasks:
+  review:
+    name: Code Review
+    description: Analyze the codebase for bugs, security vulnerabilities, and improvements. Write a detailed report.
+    agent: reviewer
+    workspace: shared
+  approval:
+    name: Review Approval
+    type: approval_gate
+    depends_on: [review]
+  fix:
+    name: Apply Fixes
+    description: Read the review report and apply the recommended fixes. Run tests to verify.
+    agent: fixer
+    depends_on: [approval]
+    workspace: shared

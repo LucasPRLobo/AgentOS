@@ -1,0 +1,29 @@
+name: quick_research
+version: "1.0"
+
+budget:
+  max_tokens: 30000
+  max_cost_usd: 1.00
+  max_concurrent_tasks: 1
+
+agents:
+  researcher:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: "You are a thorough researcher. Investigate the given topic and produce structured findings."
+    tools: [file_read, file_write, web_search]
+    budget:
+      max_tokens: 25000
+      max_cost_usd: 0.80
+
+tasks:
+  research:
+    name: research
+    description: "Research ${topic} and produce a comprehensive summary with key findings, sources, and open questions."
+    agent: researcher
+    workspace: shared
+
+parameters:
+  topic:
+    description: "Topic to research"
+    required: true

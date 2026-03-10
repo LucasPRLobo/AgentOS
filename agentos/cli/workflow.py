@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
@@ -12,6 +13,8 @@ from pathlib import Path
 
 import click
 import yaml
+
+logger = logging.getLogger(__name__)
 
 from agentos.kernel.budget_manager import BudgetManager
 from agentos.kernel.dag_executor import DAGExecutor, ExecutionContext
@@ -24,27 +27,8 @@ from agentos.schemas.gate import GateResolution, GateType
 from agentos.schemas.task import TaskConfig, TaskMetrics, TaskOutput, TaskStatus
 from agentos.schemas.workflow import WorkflowDefinition
 from agentos.schemas.workspace import WorkspaceConfig
+from agentos.schemas.tool_mapping import TIER2_TOOL_MAP, TIER2_TOOL_EXPANSIONS
 from agentos.validation.workflow_verifier import WorkflowVerifier
-
-# Mapping from YAML tool names to Claude Code CLI tool names for Tier 2 adapters.
-TIER2_TOOL_MAP = {
-    "file_read": "Read",
-    "file_write": "Write",
-    "shell_exec": "Bash",
-    "web_search": "WebSearch",
-    "web_fetch": "WebFetch",
-}
-
-# Claude Code built-in tools that should always be available to agents that need
-# file or web access. When a YAML workflow specifies tools like [web_search, file_read],
-# we expand them to include the related CC tools the agent will need.
-TIER2_TOOL_EXPANSIONS = {
-    "Read": ["Read", "Glob", "Grep"],
-    "Write": ["Write", "Edit"],
-    "Bash": ["Bash"],
-    "WebSearch": ["WebSearch", "WebFetch"],
-    "WebFetch": ["WebFetch"],
-}
 
 
 def _build_execution_context(
@@ -77,7 +61,7 @@ def _build_execution_context(
 
             ctx.knowledge_graph = SQLiteKnowledgeGraph(db)
         except Exception:
-            pass
+            logger.debug("Knowledge graph initialization skipped", exc_info=True)
 
     # Specialization Tracker
     try:
@@ -85,7 +69,7 @@ def _build_execution_context(
 
         ctx.specialization_tracker = SpecializationTracker()
     except Exception:
-        pass
+        logger.debug("Specialization tracker initialization skipped", exc_info=True)
 
     # Fine-Tune Exporter
     try:
@@ -93,7 +77,7 @@ def _build_execution_context(
 
         ctx.finetune_exporter = FineTuneExporter()
     except Exception:
-        pass
+        logger.debug("Fine-tune exporter initialization skipped", exc_info=True)
 
     # Team Composer
     if wf.spawn_policy is not None:
@@ -124,7 +108,7 @@ def _run_pre_run_analysis(
         click.echo(f"  Safety:    {click.style(f'Grade {report.grade}', fg=color)} "
                    f"({report.overall_score:.2f}/1.00)")
     except Exception:
-        pass
+        logger.debug("Safety score calculation skipped", exc_info=True)
 
     # Agent Audit
     try:
@@ -141,7 +125,7 @@ def _run_pre_run_analysis(
         else:
             click.echo(f"  Audit:     {click.style('clean', fg='green')}")
     except Exception:
-        pass
+        logger.debug("Agent audit skipped", exc_info=True)
 
 
 def _run_post_run_intelligence(
@@ -180,7 +164,7 @@ def _run_post_run_intelligence(
                 for rec in recommendations[:3]:
                     click.echo(f"    {rec.category}: {rec.description}")
     except Exception:
-        pass
+        logger.debug("Pattern detection skipped", exc_info=True)
 
     # Memory decay
     if memory_db and ctx.memory_store is not None:
@@ -189,7 +173,7 @@ def _run_post_run_intelligence(
             if pruned > 0:
                 click.echo(f"  Memory:    pruned {pruned} low-confidence entries")
         except Exception:
-            pass
+            logger.debug("Memory decay skipped", exc_info=True)
 
 
 def _build_live_executor(
@@ -215,6 +199,7 @@ def _build_live_executor(
 
     from agentos.adapters.tier1 import Tier1Adapter
     from agentos.adapters.tier2_claude_code import ClaudeCodeAdapter
+    from agentos.schemas.agent import ClaudeCodeConfig
 
     # Check for required API key if any agents use tier1
     has_tier1 = any(a.adapter == "tier1" for a in wf.agents.values())
@@ -234,7 +219,7 @@ def _build_live_executor(
 
             sandbox_mgr = SandboxManager(event_log, seq, workflow_id)
         except Exception:
-            pass
+            logger.debug("Sandbox manager initialization skipped", exc_info=True)
 
     # Post-Hoc Verifier
     post_hoc_verifier = None
@@ -243,7 +228,7 @@ def _build_live_executor(
 
         post_hoc_verifier = PostHocVerifier(event_log, seq, workflow_id)
     except Exception:
-        pass
+        logger.debug("Post-hoc verifier initialization skipped", exc_info=True)
 
     # Create adapters for each agent
     adapters = {}
@@ -276,7 +261,7 @@ def _build_live_executor(
                 try:
                     sandbox_handle = sandbox_mgr.create(name, agent_cfg.sandbox, workspace_path)
                 except Exception:
-                    pass
+                    logger.debug("Sandbox creation skipped for agent %s", name, exc_info=True)
 
             adapters[name] = ClaudeCodeAdapter(
                 budget_manager=budget_mgr,
@@ -284,6 +269,10 @@ def _build_live_executor(
                 timeout=timeout,
                 log_fn=_make_log_fn(name),
                 sandbox_handle=sandbox_handle,
+                event_log=event_log,
+                seq=seq,
+                workflow_id=workflow_id,
+                claude_code_config=agent_cfg.claude_code,
             )
         elif agent_cfg.adapter == "tier2_aider":
             from agentos.adapters.tier2_aider import AiderAdapter
@@ -341,6 +330,10 @@ def _build_live_executor(
                     timeout=timeout,
                     max_turns=15,
                     log_fn=_make_mgr_log_fn(name),
+                    event_log=event_log,
+                    seq=seq,
+                    workflow_id=workflow_id,
+                    claude_code_config=agent_cfg.claude_code,
                 )
 
                 member_adapters = {
@@ -451,27 +444,57 @@ def _build_live_executor(
                 _persist_output(task_name, config, out)
                 return TaskStatus.SUCCEEDED, out
 
-            response = click.prompt(
-                click.style("           [Enter] to approve, or type feedback to reject", fg="yellow"),
-                default="", show_default=False,
-            )
-            if response.strip() == "":
-                gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="human")
-                click.echo(f"           {click.style('Approved', fg='green')}")
-                out = _gate_output(gate_summary)
-                _persist_output(task_name, config, out)
-                return TaskStatus.SUCCEEDED, out
-            else:
-                gate_mgr.resolve_gate(
-                    gate_id, GateResolution.REJECTED,
-                    reviewer="human", feedback=response.strip(),
-                )
-                click.echo(f"           {click.style('Rejected', fg='red')}: {response.strip()}")
-                return TaskStatus.FAILED, TaskOutput(
-                    task_id=task_name, agent_id="gate",
-                    status=TaskStatus.FAILED,
-                    summary=response.strip(),
-                )
+            # Interactive gate: poll for resolution from dashboard or stdin
+            import select
+            import sys as _sys
+
+            is_tty = _sys.stdin.isatty()
+            if is_tty:
+                click.echo(click.style("           [Enter] to approve, or type feedback to reject", fg="yellow"))
+
+            while True:
+                # Check if gate was resolved via dashboard API
+                gate_state = gate_mgr.get_gate(gate_id)
+                if gate_state and not gate_state.pending:
+                    resolution = gate_state.resolution
+                    feedback = gate_state.feedback or ""
+                    click.echo(f"           {click.style('Resolved via dashboard', fg='cyan')}: {resolution}")
+                    if resolution == GateResolution.APPROVED:
+                        out = _gate_output(gate_summary)
+                        _persist_output(task_name, config, out)
+                        return TaskStatus.SUCCEEDED, out
+                    else:
+                        return TaskStatus.FAILED, TaskOutput(
+                            task_id=task_name, agent_id="gate",
+                            status=TaskStatus.FAILED,
+                            summary=feedback or "Rejected via dashboard",
+                        )
+
+                # Check stdin if available (terminal mode)
+                if is_tty:
+                    ready, _, _ = select.select([_sys.stdin], [], [], 1.0)
+                    if ready:
+                        response = _sys.stdin.readline().rstrip("\n")
+                        if response.strip() == "":
+                            gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="human")
+                            click.echo(f"           {click.style('Approved', fg='green')}")
+                            out = _gate_output(gate_summary)
+                            _persist_output(task_name, config, out)
+                            return TaskStatus.SUCCEEDED, out
+                        else:
+                            gate_mgr.resolve_gate(
+                                gate_id, GateResolution.REJECTED,
+                                reviewer="human", feedback=response.strip(),
+                            )
+                            click.echo(f"           {click.style('Rejected', fg='red')}: {response.strip()}")
+                            return TaskStatus.FAILED, TaskOutput(
+                                task_id=task_name, agent_id="gate",
+                                status=TaskStatus.FAILED,
+                                summary=response.strip(),
+                            )
+                else:
+                    # No TTY — just poll every second
+                    time.sleep(1)
 
         if config.type == "input_gate":
             gate_id = gate_mgr.create_gate(task_name, GateType.INPUT, config.prompt)
@@ -492,15 +515,50 @@ def _build_live_executor(
                 _persist_output(task_name, config, out)
                 return TaskStatus.SUCCEEDED, out
 
-            click.echo(click.style("           Enter your input (blank line + Enter to finish):", fg="cyan"))
-            lines = []
-            while True:
-                line = click.prompt("           ", default="", show_default=False)
-                if line.strip() == "":
-                    break
-                lines.append(line)
-            user_input = "\n".join(lines)
+            import select
+            import sys as _sys
 
+            is_tty = _sys.stdin.isatty()
+            if is_tty:
+                click.echo(click.style("           Enter your input (blank line + Enter to finish):", fg="cyan"))
+
+            # Poll for dashboard resolution or TTY input
+            lines: list[str] = []
+            while True:
+                # Check dashboard resolution
+                gate_state = gate_mgr.get_gate(gate_id)
+                if gate_state and not gate_state.pending:
+                    resolution = gate_state.resolution
+                    feedback = gate_state.feedback or ""
+                    click.echo(f"           {click.style('Resolved via dashboard', fg='cyan')}: {resolution}")
+                    if resolution == GateResolution.APPROVED:
+                        out = TaskOutput(
+                            task_id=task_name, agent_id="input_gate",
+                            status=TaskStatus.SUCCEEDED,
+                            summary=feedback or "Input provided via dashboard.",
+                        )
+                        _persist_output(task_name, config, out)
+                        return TaskStatus.SUCCEEDED, out
+                    else:
+                        return TaskStatus.FAILED, TaskOutput(
+                            task_id=task_name, agent_id="input_gate",
+                            status=TaskStatus.FAILED,
+                            summary=feedback or "Rejected via dashboard.",
+                        )
+
+                if is_tty:
+                    ready, _, _ = select.select([_sys.stdin], [], [], 1.0)
+                    if ready:
+                        line = _sys.stdin.readline().rstrip("\n")
+                        if line.strip() == "":
+                            break
+                        lines.append(line)
+                        continue
+                else:
+                    time.sleep(1)
+                    continue
+
+            user_input = "\n".join(lines)
             if user_input.strip():
                 gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="human")
                 click.echo(f"           {click.style('Input received', fg='green')}")
@@ -674,8 +732,12 @@ def workflow() -> None:
               help="Skip tasks before this one, replaying completed tasks from workspace manifests.")
 @click.option("--reuse-workspace", default=None,
               help="Reuse workspace from a previous run ID (e.g., run-a0fa10de).")
+@click.option("--workflow-id", default=None,
+              help="Use a specific workflow ID instead of generating one.")
+@click.option("--param", "params", multiple=True, help="Workflow parameter as key=value")
 def run(yaml_file: str, db: str, live: bool, interactive: bool,
-        memory_db: str | None, start_from: str | None, reuse_workspace: str | None) -> None:
+        memory_db: str | None, start_from: str | None, reuse_workspace: str | None,
+        workflow_id: str | None, params: tuple[str, ...]) -> None:
     """Run a workflow from a YAML file.
 
     By default uses stub executors for testing. Use --live for real
@@ -695,6 +757,35 @@ def run(yaml_file: str, db: str, live: bool, interactive: bool,
 
         wf = expand_teams(wf)
 
+    # Parse --param values and substitute into task descriptions and agent roles
+    param_values: dict[str, str] = {}
+    for p in params:
+        if "=" not in p:
+            click.echo(click.style(f"Invalid param format: {p!r}. Use key=value.", fg="red"))
+            raise SystemExit(1)
+        key, value = p.split("=", 1)
+        param_values[key] = value
+
+    # Validate against declared parameters
+    for name, param_def in wf.parameters.items():
+        if name not in param_values:
+            if param_def.required and param_def.default is None:
+                click.echo(click.style(f"Missing required parameter: {name}", fg="red"))
+                raise SystemExit(1)
+            if param_def.default is not None:
+                param_values[name] = param_def.default
+
+    # Substitute ${param_name} in task descriptions
+    if param_values:
+        for task_name, task_config in wf.tasks.items():
+            if task_config.description:
+                for key, value in param_values.items():
+                    task_config.description = task_config.description.replace(f"${{{key}}}", value)
+        for agent_name, agent_config in wf.agents.items():
+            if agent_config.role:
+                for key, value in param_values.items():
+                    agent_config.role = agent_config.role.replace(f"${{{key}}}", value)
+
     event_log = SQLiteEventLog(db)
 
     # Reuse workspace from a previous run if requested
@@ -704,7 +795,7 @@ def run(yaml_file: str, db: str, live: bool, interactive: bool,
         max_seq = event_log.last_seq(workflow_id)
         seq = SeqCounter(start=max_seq + 1 if max_seq >= 0 else 0)
     else:
-        workflow_id = f"run-{uuid.uuid4().hex[:8]}"
+        workflow_id = workflow_id or f"run-{uuid.uuid4().hex[:8]}"
         seq = SeqCounter()
 
     # Compute set of tasks to skip (replay from manifests) when --start-from is used
@@ -1042,3 +1133,85 @@ def verify(yaml_file: str) -> None:
         click.echo()
 
     click.echo(click.style("Verification PASSED", fg="green", bold=True))
+
+
+@workflow.command()
+@click.argument("yaml_file", type=click.Path(exists=True))
+def doctor(yaml_file: str) -> None:
+    """Check a workflow YAML for common configuration mistakes."""
+    import yaml as _yaml
+
+    raw = Path(yaml_file).read_text()
+
+    # Parse YAML
+    try:
+        data = _yaml.safe_load(raw)
+    except _yaml.YAMLError as e:
+        click.echo(click.style(f"YAML parse error: {e}", fg="red"))
+        raise SystemExit(1)
+
+    # Validate against schema
+    try:
+        wf = WorkflowDefinition.model_validate(data)
+    except Exception as e:
+        click.echo(click.style(f"Schema validation error: {e}", fg="red"))
+        raise SystemExit(1)
+
+    # Run verifier
+    verifier = WorkflowVerifier()
+    report = verifier.verify(wf)
+
+    task_count = len(wf.tasks)
+    agent_count = len(wf.agents)
+    team_count = len(wf.teams) if wf.teams else 0
+    header = f"Workflow: {wf.name} ({task_count} tasks, {agent_count} agents"
+    if team_count:
+        header += f", {team_count} teams"
+    header += ")"
+    click.echo(header)
+    click.echo()
+
+    if report.errors:
+        click.echo(click.style("Errors (must fix):", fg="red", bold=True))
+        for i, issue in enumerate(report.errors, 1):
+            click.echo(click.style(f"  [E{i:03d}] ", fg="red") + issue.message)
+        click.echo()
+
+    if report.warnings:
+        click.echo(click.style("Warnings (should fix):", fg="yellow", bold=True))
+        for i, issue in enumerate(report.warnings, 1):
+            click.echo(click.style(f"  [W{i:03d}] ", fg="yellow") + issue.message)
+        click.echo()
+
+    # Summary
+    error_count = len(report.errors)
+    warning_count = len(report.warnings)
+
+    if error_count == 0 and warning_count == 0:
+        click.echo(click.style("Result: No issues found.", fg="green"))
+    else:
+        parts = []
+        if error_count:
+            parts.append(f"{error_count} error{'s' if error_count != 1 else ''}")
+        if warning_count:
+            parts.append(f"{warning_count} warning{'s' if warning_count != 1 else ''}")
+        click.echo(f"Result: {', '.join(parts)}")
+
+    if error_count > 0:
+        raise SystemExit(1)
+
+
+@workflow.command()
+@click.option("--output", "-o", default=None, help="Output file path (default: stdout)")
+def schema(output: str | None) -> None:
+    """Output the JSON Schema for workflow YAML files."""
+    import json as _json
+
+    schema_data = WorkflowDefinition.model_json_schema()
+    content = _json.dumps(schema_data, indent=2)
+
+    if output:
+        Path(output).write_text(content)
+        click.echo(f"Schema written to: {output}")
+    else:
+        click.echo(content)

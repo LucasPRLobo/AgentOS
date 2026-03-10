@@ -181,10 +181,19 @@ class TestBuildEnv:
         env = _build_env()
         assert "CLAUDECODE" not in env
 
-    def test_preserves_other_vars(self, monkeypatch):
-        monkeypatch.setenv("MY_VAR", "hello")
+    def test_preserves_whitelisted_vars(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/test")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
         env = _build_env()
-        assert env["MY_VAR"] == "hello"
+        assert env["HOME"] == "/home/test"
+        assert env["ANTHROPIC_API_KEY"] == "sk-test"
+
+    def test_blocks_non_whitelisted_vars(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-leaked")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+        env = _build_env()
+        assert "OPENAI_API_KEY" not in env
+        assert "AWS_SECRET_ACCESS_KEY" not in env
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +342,7 @@ class TestClaudeCodeAdapterExecute:
 
     def test_all_retries_exhausted(self, budget_manager, workspace):
         """No manifest after all retries → FAILED."""
-        mock_sub = make_mock_subprocess(stdout="{}")  # Never writes manifest
+        mock_sub = make_mock_subprocess(stdout="")  # Never writes manifest, no useful output
         adapter = ClaudeCodeAdapter(budget_manager, "agent1", run_subprocess=mock_sub)
 
         output = asyncio.run(adapter.execute_task(

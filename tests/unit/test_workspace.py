@@ -283,3 +283,47 @@ class TestEnsureRoot:
         assert workspace_dir.exists()
         workspace.ensure_root()  # Should not raise
         assert workspace_dir.exists()
+
+
+class TestCleanupTask:
+    """cleanup_task removes a single task's subdirectory."""
+
+    def test_removes_task_directory(self, workspace):
+        task_dir = workspace.root / "my_task"
+        task_dir.mkdir()
+        (task_dir / "output.txt").write_text("hello")
+        workspace.cleanup_task("my_task")
+        assert not task_dir.exists()
+
+    def test_nonexistent_task_is_noop(self, workspace):
+        workspace.cleanup_task("nonexistent_task")  # Should not raise
+
+
+class TestGarbageCollect:
+    """garbage_collect removes artifacts from failed tasks."""
+
+    def test_removes_failed_task_dirs(self, workspace):
+        for name in ["task_a", "task_b", "task_c"]:
+            d = workspace.root / name
+            d.mkdir()
+            (d / "file.txt").write_text("data")
+
+        workspace.garbage_collect({"task_a", "task_c"})
+
+        assert not (workspace.root / "task_a").exists()
+        assert (workspace.root / "task_b").exists()
+        assert not (workspace.root / "task_c").exists()
+
+    def test_removes_context_files(self, workspace):
+        ctx_dir = workspace.root / ".agentos_context"
+        ctx_dir.mkdir()
+        (ctx_dir / "failed_task.json").write_text("{}")
+        (ctx_dir / "good_task.json").write_text("{}")
+
+        workspace.garbage_collect({"failed_task"})
+
+        assert not (ctx_dir / "failed_task.json").exists()
+        assert (ctx_dir / "good_task.json").exists()
+
+    def test_empty_failed_set_is_noop(self, workspace):
+        workspace.garbage_collect(set())  # Should not raise

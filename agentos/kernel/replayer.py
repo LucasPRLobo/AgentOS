@@ -167,6 +167,7 @@ class WorkflowReplayer:
             EventType.AGENT_TERMINATED: self._on_agent_terminated,
             EventType.GATE_WAITING: self._on_gate_waiting,
             EventType.GATE_RESOLVED: self._on_gate_resolved,
+            EventType.HUMAN_INPUT_PROVIDED: self._on_noop,
             EventType.BUDGET_CONSUMED: self._on_budget_consumed,
             EventType.BUDGET_EXCEEDED: self._on_budget_exceeded,
             EventType.CAPABILITY_GRANTED: self._on_noop,
@@ -178,7 +179,10 @@ class WorkflowReplayer:
             EventType.REVISION_FEEDBACK: self._on_noop,
             EventType.MESSAGE_SENT: self._on_noop,
             EventType.MESSAGE_RECEIVED: self._on_noop,
+            EventType.AGENT_TOOL_CALL: self._on_agent_tool_call,
+            EventType.AGENT_TEXT_OUTPUT: self._on_noop,
             EventType.ERROR_OCCURRED: self._on_error,
+            EventType.MANIFEST_INFERRED: self._on_noop,
         }
         handler = handlers.get(event.event_type, self._on_noop)
         handler(event, snap)
@@ -285,6 +289,13 @@ class WorkflowReplayer:
         budget = snap.budgets[agent_id]
         budget.exceeded = True
         budget.exceeded_resource = event.payload.get("resource", "")
+
+    @staticmethod
+    def _on_agent_tool_call(event: Event, snap: WorkflowSnapshot) -> None:
+        agent_id = event.payload.get("agent_id", "")
+        if agent_id in snap.agents:
+            tools = snap.agents[agent_id].metrics.setdefault("tool_calls", [])
+            tools.append(event.payload.get("tool_name", ""))
 
     @staticmethod
     def _on_error(event: Event, snap: WorkflowSnapshot) -> None:

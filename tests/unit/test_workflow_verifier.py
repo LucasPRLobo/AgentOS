@@ -409,3 +409,202 @@ class TestMultipleErrors:
         assert "missing_dependency" in codes
         assert "undefined_agent" in codes
         assert "agent_task_no_agent" in codes
+
+
+# ---------------------------------------------------------------------------
+# Tests: Tool name checks
+# ---------------------------------------------------------------------------
+
+class TestToolNameChecks:
+    def test_valid_tools_no_warnings(self, verifier):
+        wf = _wf(
+            tasks={"t1": {"description": "do", "agent": "a1"}},
+            agents={"a1": {"adapter": "tier2_claude_code", "model": "test",
+                          "tools": ["file_read", "file_write"],
+                          "budget": {"max_tokens": 1000, "max_cost_usd": 1.0}}},
+        )
+        report = verifier.verify(wf)
+        tool_warnings = [w for w in report.warnings if w.code == "unknown_tool"]
+        assert len(tool_warnings) == 0
+
+    def test_unknown_tool_warns(self, verifier):
+        wf = _wf(
+            tasks={"t1": {"description": "do", "agent": "a1"}},
+            agents={"a1": {"adapter": "tier2_claude_code", "model": "test",
+                          "tools": ["file_read", "websearch"],
+                          "budget": {"max_tokens": 1000, "max_cost_usd": 1.0}}},
+        )
+        report = verifier.verify(wf)
+        tool_warnings = [w for w in report.warnings if w.code == "unknown_tool"]
+        assert len(tool_warnings) == 1
+        assert "websearch" in tool_warnings[0].message
+
+    def test_did_you_mean_suggestion(self, verifier):
+        wf = _wf(
+            tasks={"t1": {"description": "do", "agent": "a1"}},
+            agents={"a1": {"adapter": "tier2_claude_code", "model": "test",
+                          "tools": ["file_reade"],
+                          "budget": {"max_tokens": 1000, "max_cost_usd": 1.0}}},
+        )
+        report = verifier.verify(wf)
+        tool_warnings = [w for w in report.warnings if w.code == "unknown_tool"]
+        assert len(tool_warnings) == 1
+        assert "file_read" in tool_warnings[0].message
+
+    def test_empty_tools_no_warnings(self, verifier):
+        wf = _wf(
+            tasks={"t1": {"description": "do", "agent": "a1"}},
+            agents={"a1": {"adapter": "tier2_claude_code", "model": "test"}},
+        )
+        report = verifier.verify(wf)
+        tool_warnings = [w for w in report.warnings if w.code == "unknown_tool"]
+        assert len(tool_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Write capability checks
+# ---------------------------------------------------------------------------
+
+class TestWriteCapabilityChecks:
+    def test_no_file_write_warns(self, verifier):
+        wf = _wf(
+            tasks={"t1": {"description": "do", "agent": "a1"}},
+            agents={"a1": {"adapter": "tier2_claude_code", "model": "test",
+                          "tools": ["file_read"],
+                          "budget": {"max_tokens": 1000, "max_cost_usd": 1.0}}},
+        )
+        report = verifier.verify(wf)
+        write_warnings = [w for w in report.warnings if w.code == "missing_write_tool"]
+        assert len(write_warnings) == 1
+
+    def test_has_file_write_no_warning(self, verifier):
+        wf = _wf(
+            tasks={"t1": {"description": "do", "agent": "a1"}},
+            agents={"a1": {"adapter": "tier2_claude_code", "model": "test",
+                          "tools": ["file_read", "file_write"],
+                          "budget": {"max_tokens": 1000, "max_cost_usd": 1.0}}},
+        )
+        report = verifier.verify(wf)
+        write_warnings = [w for w in report.warnings if w.code == "missing_write_tool"]
+        assert len(write_warnings) == 0
+
+    def test_gate_task_no_write_warning(self, verifier):
+        wf = _wf(
+            tasks={"gate1": {"description": "approve", "type": "approval_gate", "depends_on": []}},
+            agents={"a1": {"adapter": "tier2_claude_code", "model": "test",
+                          "tools": ["file_read"],
+                          "budget": {"max_tokens": 1000, "max_cost_usd": 1.0}}},
+        )
+        report = verifier.verify(wf)
+        write_warnings = [w for w in report.warnings if w.code == "missing_write_tool"]
+        assert len(write_warnings) == 0
+
+    def test_no_agent_no_write_warning(self, verifier):
+        """Tasks without an agent (e.g. gates) should not trigger write warnings."""
+        wf = _wf(
+            tasks={"gate1": {"description": "approve", "type": "input_gate"}},
+            agents={},
+        )
+        report = verifier.verify(wf)
+        write_warnings = [w for w in report.warnings if w.code == "missing_write_tool"]
+        assert len(write_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Manager tool restrictions
+# ---------------------------------------------------------------------------
+
+class TestManagerToolRestrictions:
+    def test_manager_with_shell_exec_errors(self, verifier):
+        from agentos.schemas.team import TeamConfig
+        wf = WorkflowDefinition(
+            name="test",
+            tasks={
+                "t1": TaskConfig(name="t1", description="do", agent="manager1"),
+            },
+            agents={
+                "manager1": AgentConfig(
+                    adapter="tier2_claude_code", model="test",
+                    tools=["file_read", "file_write", "shell_exec"],
+                    budget=BudgetSpec(max_tokens=1000, max_cost_usd=1.0),
+                ),
+                "member1": AgentConfig(
+                    adapter="tier2_claude_code", model="test",
+                    tools=["file_read", "file_write"],
+                    budget=BudgetSpec(max_tokens=1000, max_cost_usd=1.0),
+                ),
+            },
+            teams={
+                "team1": TeamConfig(manager="manager1", members=["member1"]),
+            },
+        )
+        report = verifier.verify(wf)
+        mgr_errors = [e for e in report.errors if e.code == "manager_dangerous_tools"]
+        assert len(mgr_errors) == 1
+        assert "shell_exec" in mgr_errors[0].message
+
+    def test_manager_with_web_search_errors(self, verifier):
+        from agentos.schemas.team import TeamConfig
+        wf = WorkflowDefinition(
+            name="test",
+            tasks={
+                "t1": TaskConfig(name="t1", description="do", agent="manager1"),
+            },
+            agents={
+                "manager1": AgentConfig(
+                    adapter="tier2_claude_code", model="test",
+                    tools=["file_read", "web_search"],
+                    budget=BudgetSpec(max_tokens=1000, max_cost_usd=1.0),
+                ),
+                "member1": AgentConfig(
+                    adapter="tier2_claude_code", model="test",
+                    tools=["file_read"],
+                    budget=BudgetSpec(max_tokens=1000, max_cost_usd=1.0),
+                ),
+            },
+            teams={
+                "team1": TeamConfig(manager="manager1", members=["member1"]),
+            },
+        )
+        report = verifier.verify(wf)
+        mgr_errors = [e for e in report.errors if e.code == "manager_dangerous_tools"]
+        assert len(mgr_errors) == 1
+        assert "web_search" in mgr_errors[0].message
+
+    def test_manager_safe_tools_no_error(self, verifier):
+        from agentos.schemas.team import TeamConfig
+        wf = WorkflowDefinition(
+            name="test",
+            tasks={
+                "t1": TaskConfig(name="t1", description="do", agent="manager1"),
+            },
+            agents={
+                "manager1": AgentConfig(
+                    adapter="tier2_claude_code", model="test",
+                    tools=["file_read", "file_write"],
+                    budget=BudgetSpec(max_tokens=1000, max_cost_usd=1.0),
+                ),
+                "member1": AgentConfig(
+                    adapter="tier2_claude_code", model="test",
+                    tools=["file_read", "file_write"],
+                    budget=BudgetSpec(max_tokens=1000, max_cost_usd=1.0),
+                ),
+            },
+            teams={
+                "team1": TeamConfig(manager="manager1", members=["member1"]),
+            },
+        )
+        report = verifier.verify(wf)
+        mgr_errors = [e for e in report.errors if e.code == "manager_dangerous_tools"]
+        assert len(mgr_errors) == 0
+
+    def test_no_teams_no_manager_errors(self, verifier):
+        """Without teams, manager tool restrictions should not fire."""
+        wf = _wf(
+            tasks={"t1": {"description": "do", "agent": "a1"}},
+            agents={"a1": {"adapter": "tier2_claude_code", "model": "test",
+                          "tools": ["file_read", "shell_exec"]}},
+        )
+        report = verifier.verify(wf)
+        mgr_errors = [e for e in report.errors if e.code == "manager_dangerous_tools"]
+        assert len(mgr_errors) == 0

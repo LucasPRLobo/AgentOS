@@ -7,6 +7,7 @@ manifest parsing, and manifest-to-TaskOutput conversion.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -132,3 +133,59 @@ def manifest_to_task_output(
         open_questions=manifest.get("open_questions", []),
         metrics=metrics,
     )
+
+
+def extract_manifest_from_text(raw_output: str) -> dict[str, Any] | None:
+    """Attempt to extract manifest-like data from agent's natural language output.
+
+    When an agent fails to produce manifest.json, this function tries to salvage
+    useful information from the raw text output. Returns a dict with
+    "extraction_mode": "inferred" flag, or None if nothing useful found.
+    """
+    if not raw_output or not raw_output.strip():
+        return None
+
+    lines = raw_output.strip().splitlines()
+
+    # Extract summary: first non-empty paragraph (up to 3 sentences)
+    summary_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if summary_lines:
+                break
+            continue
+        summary_lines.append(stripped)
+        if len(summary_lines) >= 3:
+            break
+    summary = " ".join(summary_lines) if summary_lines else None
+
+    if not summary:
+        return None
+
+    # Extract findings: bullet points or numbered lists
+    findings = []
+    bullet_pattern = re.compile(r"^\s*[-*\u2022]\s+(.+)")
+    numbered_pattern = re.compile(r"^\s*\d+[.)]\s+(.+)")
+    for line in lines:
+        match = bullet_pattern.match(line) or numbered_pattern.match(line)
+        if match:
+            finding_text = match.group(1).strip()
+            if finding_text and len(finding_text) > 10:
+                findings.append({
+                    "finding": finding_text,
+                    "confidence": "low",
+                    "sources": [],
+                })
+
+    # Extract file references: paths that look like file paths
+    file_pattern = re.compile(r"(?:^|\s)([./][\w/.-]+\.\w+)")
+    files_produced = list(set(file_pattern.findall(raw_output)))
+
+    return {
+        "summary": summary,
+        "findings": findings[:10],  # Cap at 10
+        "open_questions": [],
+        "files_produced": files_produced[:20],  # Cap at 20
+        "extraction_mode": "inferred",
+    }

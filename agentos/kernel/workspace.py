@@ -180,6 +180,30 @@ class Workspace:
         if self._root.exists():
             shutil.rmtree(self._root)
 
+    def cleanup_task(self, task_name: str) -> None:
+        """Remove a single task's subdirectory from the workspace."""
+        task_dir = self._root / task_name
+        if task_dir.exists() and task_dir.is_dir():
+            shutil.rmtree(task_dir)
+
+    def garbage_collect(self, failed_tasks: set[str]) -> None:
+        """Remove workspace artifacts from failed tasks.
+
+        Cleans up:
+        - Task subdirectories for failed tasks
+        - Temporary context files (.agentos_context/) for failed tasks
+        """
+        for task_name in failed_tasks:
+            self.cleanup_task(task_name)
+
+        # Clean up context files for failed tasks
+        ctx_dir = self._root / ".agentos_context"
+        if ctx_dir.exists():
+            for task_name in failed_tasks:
+                ctx_file = ctx_dir / f"{task_name}.json"
+                if ctx_file.exists():
+                    ctx_file.unlink()
+
     def _is_contained(self, resolved: Path) -> bool:
         """Check if a resolved path is inside the workspace root."""
         try:

@@ -41,15 +41,15 @@ class TestComponentFilesExist:
         assert path.exists()
         content = path.read_text()
         assert "PropertyPanel" in content
-        assert "onUpdate" in content
-        assert "onDelete" in content
+        assert "useBuilder" in content
+        assert "DELETE_TASK" in content
 
     def test_export_import_exists(self):
         path = FRONTEND_SRC / "components" / "builder" / "ExportImport.tsx"
         assert path.exists()
         content = path.read_text()
         assert "ExportImport" in content
-        assert "nodesToYaml" in content
+        assert "onImport" in content
 
     def test_builder_page_exists(self):
         path = FRONTEND_SRC / "pages" / "BuilderPage.tsx"
@@ -99,17 +99,17 @@ class TestCanvasInteractions:
 
     def test_canvas_renders_edges(self):
         content = (FRONTEND_SRC / "components" / "builder" / "Canvas.tsx").read_text()
-        assert "edges.map" in content
-        assert "arrowhead" in content
+        assert "state.edges" in content
+        assert "canvas-arrow" in content
 
     def test_canvas_renders_nodes(self):
         content = (FRONTEND_SRC / "components" / "builder" / "Canvas.tsx").read_text()
-        assert "nodes.map" in content
-        assert "canvas-node-" in content
+        assert "tasks.map" in content
+        assert "canvas-node" in content
 
     def test_canvas_supports_selection(self):
         content = (FRONTEND_SRC / "components" / "builder" / "Canvas.tsx").read_text()
-        assert "selectedNodeId" in content
+        assert "SELECT_NODE" in content
 
 
 class TestBuilderBackendWithFrontendData:

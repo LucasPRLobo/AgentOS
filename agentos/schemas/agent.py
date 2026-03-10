@@ -17,6 +17,39 @@ class AdapterTier(IntEnum):
     TIER3 = 3  # Best-effort
 
 
+class ClaudeCodeConfig(BaseModel):
+    """Claude Code Tier 2 specific configuration."""
+
+    permission_mode: str | None = Field(
+        default=None,
+        description="Claude Code permission mode: default, plan, auto, bypassPermissions",
+    )
+    append_system_prompt: str | None = Field(
+        default=None,
+        description="Additional system prompt appended to the agent's role",
+    )
+    mcp_config: list[str] = Field(
+        default_factory=list,
+        description="MCP server configuration JSON strings or file paths",
+    )
+    disabled_commands: list[str] = Field(
+        default_factory=list,
+        description="Slash commands to disable (e.g., 'commit', 'push')",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Override model for this agent (e.g., claude-sonnet-4-6)",
+    )
+    max_turns: int | None = Field(
+        default=None,
+        description="Maximum conversation turns",
+    )
+    add_dirs: list[str] = Field(
+        default_factory=list,
+        description="Additional directories the agent can access beyond workspace",
+    )
+
+
 class AgentConfig(BaseModel):
     """Configuration for a single agent."""
 
@@ -36,6 +69,10 @@ class AgentConfig(BaseModel):
     team: str | None = Field(
         default=None,
         description="Team name this agent belongs to (auto-populated by team expander)",
+    )
+    claude_code: ClaudeCodeConfig = Field(
+        default_factory=ClaudeCodeConfig,
+        description="Claude Code specific configuration (Tier 2 only)",
     )
 
     def to_capability_policy(self, agent_id: str) -> CapabilityPolicy:

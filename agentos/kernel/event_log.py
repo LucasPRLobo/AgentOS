@@ -121,6 +121,8 @@ class SQLiteEventLog(EventLog):
         sql += " ORDER BY seq"
 
         with self._lock:
+            # End any implicit transaction so we see writes from other processes
+            self._conn.rollback()
             rows = self._conn.execute(sql, params).fetchall()
 
         return [self._row_to_event(row) for row in rows]
@@ -130,6 +132,7 @@ class SQLiteEventLog(EventLog):
 
     def last_seq(self, workflow_id: str) -> int:
         with self._lock:
+            self._conn.rollback()
             row = self._conn.execute(
                 "SELECT MAX(seq) FROM events WHERE workflow_id = ?",
                 (workflow_id,),
