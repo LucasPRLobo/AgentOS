@@ -6,7 +6,7 @@ AgentOS is a governance and orchestration platform for autonomous AI agents. It 
 
 ```bash
 # Clone the repository
-git clone https://github.com/lucaslobo/AgentOS.git
+git clone https://github.com/LucasPRLobo/AgentOS.git
 cd AgentOS
 
 # Install in development mode
