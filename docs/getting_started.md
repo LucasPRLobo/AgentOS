@@ -32,21 +32,30 @@ The doctor catches tool name typos, missing capabilities, budget issues, and DAG
 
 ### 2. Run a simple workflow
 
+By default, `workflow run` uses **stub mode** (no real agents, no API calls). Add `--live` to use real Claude Code agents, and `--interactive` to manually approve gates.
+
 ```bash
-# Single-agent research with a parameter
+# Stub mode (no API calls — safe to experiment)
+agentos workflow run examples/quick_research.yaml \
+  --db test.db \
+  --param topic="autonomous vehicle regulation"
+
+# Live mode with real agents
 agentos workflow run examples/quick_research.yaml \
   --db research.db \
-  --param topic="autonomous vehicle regulation"
+  --param topic="autonomous vehicle regulation" \
+  --live
 ```
 
 ### 3. Run a multi-agent workflow
 
 ```bash
-# Parallel research + approval gate + synthesis
+# Live + interactive gates (full experience)
 agentos workflow run examples/hedge_fund_analysis.yaml \
   --db analysis.db \
   --param ticker=NVDA \
-  --param sector=semiconductors
+  --param sector=semiconductors \
+  --live --interactive
 ```
 
 This runs two agents in parallel (market researcher + macro analyst), pauses at an approval gate for your review, then runs a strategist to synthesize the recommendation.

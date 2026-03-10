@@ -148,7 +148,7 @@ Agents **only** get the tools you list. An agent with `tools: [file_read]` canno
 ### What happens at runtime
 
 ```
-$ agentos workflow run examples/quick_research.yaml --db run.db --param topic="AI regulation"
+$ agentos workflow run examples/quick_research.yaml --db run.db --param topic="AI regulation" --live
 
   [12:00:01] START  quick_research (workflow_id: wf-abc123)
   [12:00:01] RUN    research → researcher (claude-sonnet-4-6)
@@ -343,22 +343,35 @@ The doctor checks for DAG issues, invalid tool names, missing capabilities, and 
 
 ### 2. Run a workflow
 
-```bash
-# Simple single-agent research (parameterized)
-agentos workflow run examples/quick_research.yaml \
-  --db research.db \
-  --param topic="autonomous vehicle regulation in 2026"
+By default, `workflow run` uses **stub mode** (no real agents, no API calls) for safe testing. Add `--live` to spawn real Claude Code agents, and `--interactive` to manually approve gates instead of auto-approving them.
 
-# Multi-agent analysis with parallel tasks and approval gate
-agentos workflow run examples/hedge_fund_analysis.yaml \
-  --db analysis.db \
+```bash
+# Stub mode (no API calls, instant results — good for testing)
+agentos workflow run examples/quick_research.yaml --db test.db \
+  --param topic="autonomous vehicle regulation"
+
+# Live mode with real agents
+agentos workflow run examples/quick_research.yaml --db research.db \
+  --param topic="autonomous vehicle regulation" \
+  --live
+
+# Live + interactive gates (recommended for real workflows)
+agentos workflow run examples/hedge_fund_analysis.yaml --db analysis.db \
   --param ticker=NVDA \
-  --param sector=semiconductors
+  --param sector=semiconductors \
+  --live --interactive
 ```
+
+| Flag | Effect |
+|------|--------|
+| (none) | Stub mode. Fake results, no API calls, gates auto-approved. |
+| `--live` | Real agents. Spawns Claude Code instances, uses API credits. |
+| `--interactive` | Manual gates. Prompts you to approve/reject instead of auto-approving. |
+| `--live --interactive` | Full experience. Real agents with human-in-the-loop. |
 
 ### 3. Manage gates
 
-When a workflow hits an approval gate, it pauses and waits for human input:
+When a workflow hits an approval gate (in `--interactive` mode), it pauses and waits for human input:
 
 ```bash
 # See pending gates
@@ -632,8 +645,8 @@ Each task gets its own subdirectory within the workflow workspace. Agents receiv
 ## CLI Reference
 
 ```
-agentos workflow run FILE --db PATH [--param KEY=VALUE]...
-    Run a workflow from a YAML definition.
+agentos workflow run FILE --db PATH [--live] [--interactive] [--param KEY=VALUE]...
+    Run a workflow. Stub mode by default. --live for real agents, --interactive for manual gates.
 
 agentos workflow resume FILE WORKFLOW_ID --db PATH [--start-from TASK] [--reuse-workspace RUN_ID]
     Resume a paused or partially completed workflow.
