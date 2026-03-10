@@ -840,18 +840,10 @@ AgentOS is licensed under the [Business Source License 1.1](LICENSE). The source
 
 For commercial licensing inquiries, contact the maintainers.
 
-## Contributing and Feedback
+## Feedback
 
-AgentOS is in active development. We're looking for feedback from technical users building real workflows.
+AgentOS is in early access. We're actively looking for feedback from technical users building real workflows.
 
-- **Issues and bugs**: Open an issue on GitHub
-- **Feature requests**: Open an issue with the `enhancement` label
-- **Questions**: Start a discussion on GitHub Discussions
+**[Share your feedback](https://forms.gle/ZBsbSapfr1Zv54mNA)** — Takes 2 minutes. Covers installation experience, workflow usability, and feature priorities. Your input directly shapes what we build next.
 
-To validate your workflow before running:
-
-```bash
-agentos workflow doctor your_workflow.yaml
-```
-
-This catches most configuration mistakes before they cost you API credits.
+For bugs and feature requests, [open an issue on GitHub](https://github.com/LucasPRLobo/AgentOS/issues).
