@@ -129,14 +129,16 @@ def create_app(db_path: str) -> FastAPI:
     app.add_middleware(AuthMiddleware, auth_manager=auth_manager)
 
     # CORS — configurable origins, defaults to common local dev ports
-    allowed_origins = os.environ.get(
+    raw_origins = os.environ.get(
         "AGENTOS_CORS_ORIGINS", "http://localhost:5173,http://localhost:8420"
-    ).split(",")
+    )
+    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip() and o.strip() != "*"]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        allow_credentials=False,
     )
 
     # Shared event log — SQLite WAL mode supports concurrent reads
