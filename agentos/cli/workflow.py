@@ -450,7 +450,7 @@ def _build_live_executor(
 
             is_tty = _sys.stdin.isatty()
             if is_tty:
-                click.echo(click.style("           [Enter] to approve, or type feedback to reject", fg="yellow"))
+                click.echo(click.style("           [a]pprove / [r]eject / or type feedback to approve with guidance", fg="yellow"))
 
             while True:
                 # Check if gate was resolved via dashboard API
@@ -474,24 +474,38 @@ def _build_live_executor(
                 if is_tty:
                     ready, _, _ = select.select([_sys.stdin], [], [], 1.0)
                     if ready:
-                        response = _sys.stdin.readline().rstrip("\n")
-                        if response.strip() == "":
+                        response = _sys.stdin.readline().rstrip("\n").strip()
+                        if response == "" or response.lower() in ("a", "approve", "y", "yes"):
                             gate_mgr.resolve_gate(gate_id, GateResolution.APPROVED, reviewer="human")
                             click.echo(f"           {click.style('Approved', fg='green')}")
                             out = _gate_output(gate_summary)
                             _persist_output(task_name, config, out)
                             return TaskStatus.SUCCEEDED, out
-                        else:
+                        elif response.lower() in ("r", "reject", "n", "no"):
                             gate_mgr.resolve_gate(
                                 gate_id, GateResolution.REJECTED,
-                                reviewer="human", feedback=response.strip(),
+                                reviewer="human", feedback="Rejected by user",
                             )
-                            click.echo(f"           {click.style('Rejected', fg='red')}: {response.strip()}")
+                            click.echo(f"           {click.style('Rejected', fg='red')}")
                             return TaskStatus.FAILED, TaskOutput(
                                 task_id=task_name, agent_id="gate",
                                 status=TaskStatus.FAILED,
-                                summary=response.strip(),
+                                summary="Rejected by user.",
                             )
+                        else:
+                            # Any other text = approve with feedback (guidance for downstream tasks)
+                            gate_mgr.resolve_gate(
+                                gate_id, GateResolution.APPROVED,
+                                reviewer="human", feedback=response,
+                            )
+                            click.echo(f"           {click.style('Approved with feedback', fg='green')}: {response}")
+                            out = TaskOutput(
+                                task_id=task_name, agent_id="gate",
+                                status=TaskStatus.SUCCEEDED,
+                                summary=response,
+                            )
+                            _persist_output(task_name, config, out)
+                            return TaskStatus.SUCCEEDED, out
                 else:
                     # No TTY — just poll every second
                     time.sleep(1)
