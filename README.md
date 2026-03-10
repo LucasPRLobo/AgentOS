@@ -410,7 +410,19 @@ agentos replay --db analysis.db --workflow-id <id>
 
 # Generate compliance report
 agentos compliance-report <workflow-id> --db analysis.db --format html -o report.html
+
+# Browse agent workspace — files and manifests produced by each task
+ls /tmp/agentos/<workflow-id>/shared/
+
+# Each task has its own directory with a manifest.json and any files the agent created
+cat /tmp/agentos/<workflow-id>/shared/market_research/manifest.json
 ```
+
+Agent workspaces persist after the run. Each task directory contains:
+- `manifest.json` — structured output with summary, findings, confidence, sources, and file references
+- Any files the agent created during execution (reports, code, data)
+
+These are the actual artifacts that flow between agents. Downstream tasks receive their predecessors' manifests as context automatically.
 
 ### Demo mode (no LLM calls)
 
