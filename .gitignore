@@ -83,3 +83,4 @@ examples/research_with_consultation.yaml
 examples/code_review_loop.yaml
 examples/aider_code_review.yaml
 examples/test_pipeline.yaml
+CLAUDE.md
