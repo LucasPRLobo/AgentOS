@@ -19,6 +19,8 @@ Most "multi-agent" frameworks chain API calls. AgentOS orchestrates actual agent
 
 ## Installation
 
+### 1. Install AgentOS
+
 ```bash
 git clone https://github.com/lucaslobo/AgentOS.git
 cd AgentOS
@@ -27,10 +29,147 @@ pip install -e ".[dev]"
 
 **Requirements:**
 - Python 3.11+
-- Claude Code CLI (for Tier 2 workflows): `npm install -g @anthropic-ai/claude-code`
 - `ANTHROPIC_API_KEY` environment variable set
+- No external databases or services needed — AgentOS uses SQLite with WAL mode
 
-No external databases or services needed — AgentOS uses SQLite with WAL mode.
+### 2. Install Claude Code (for Tier 2 agents)
+
+AgentOS uses Claude Code as its primary Tier 2 agent runtime. Each agent in your workflow spawns a Claude Code instance with scoped tools, workspace isolation, and budget limits.
+
+```bash
+# Install Claude Code CLI globally
+npm install -g @anthropic-ai/claude-code
+```
+
+Verify installation:
+
+```bash
+claude --version
+```
+
+> **Note**: Claude Code requires Node.js 18+. If you don't have Node.js installed: https://nodejs.org/
+
+### 3. Set up your API key
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Add to your shell profile (`~/.bashrc`, `~/.zshrc`) to persist across sessions.
+
+### 4. Verify everything works
+
+```bash
+# Validate an example workflow (no API calls)
+agentos workflow doctor examples/quick_research.yaml
+
+# Run the demo with stub executors (no API calls, no cost)
+agentos demo examples/linear_research.yaml --db demo.db
+```
+
+## How AgentOS Connects to Claude Code
+
+AgentOS doesn't embed or replace Claude Code — it orchestrates it. When a workflow runs, AgentOS:
+
+1. **Spawns** a Claude Code process for each task, in the task's isolated workspace directory
+2. **Configures** it with the agent's role (system prompt), scoped tools, and any Claude Code-specific settings
+3. **Monitors** execution — tracking token usage, cost, and time against budget limits
+4. **Collects** the structured output (`manifest.json`) that the agent produces
+5. **Passes** that output as context to downstream tasks in the DAG
+
+Each Claude Code agent runs with `--print` mode (non-interactive) and only has access to the tools you explicitly allow in the YAML. AgentOS blocks tools like `Agent`, `TodoWrite`, and `ToolSearch` to prevent agents from spawning uncontrolled sub-agents.
+
+### Agent configuration in YAML
+
+A minimal Tier 2 agent:
+
+```yaml
+agents:
+  researcher:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: "You are a financial researcher. Analyze market data and produce findings."
+    tools: [file_read, file_write, web_search]
+    budget:
+      max_tokens: 30000
+      max_cost_usd: 1.50
+```
+
+### Advanced Claude Code configuration
+
+For fine-grained control over how Claude Code runs, use the `claude_code` block:
+
+```yaml
+agents:
+  analyst:
+    adapter: tier2_claude_code
+    model: claude-sonnet-4-6
+    role: "You are a data analyst."
+    tools: [file_read, file_write]
+    claude_code:
+      # Permission mode: plan (review before actions), default, auto
+      # Note: bypassPermissions is blocked — governance platforms never bypass
+      permission_mode: plan
+
+      # Append extra instructions to the agent's role prompt
+      append_system_prompt: "Always include confidence scores (1-10) with findings."
+
+      # Override model for this specific agent
+      model: claude-sonnet-4-6
+
+      # Limit conversation turns to prevent runaway agents
+      max_turns: 15
+
+      # Give the agent access to additional directories beyond its workspace
+      add_dirs: ["/data/shared-datasets"]
+
+      # Block specific slash commands
+      disabled_commands: [commit, push]
+
+      # Connect MCP servers for extended capabilities
+      mcp_config:
+        - '{"mcpServers": {"finance-data": {"command": "npx", "args": ["-y", "finance-mcp-server"]}}}'
+```
+
+### Tool mapping
+
+YAML tool names are human-readable shortcuts that expand to Claude Code's actual tool names:
+
+| YAML name | Claude Code tools | What the agent can do |
+|-----------|------------------|----------------------|
+| `file_read` | Read, Glob, Grep | Read files, search by name/pattern, search content |
+| `file_write` | Write, Edit | Create new files, modify existing files |
+| `web_search` | WebSearch, WebFetch | Search the web, fetch specific URLs |
+| `web_fetch` | WebFetch | Fetch specific URLs |
+| `shell_exec` | Bash | Execute shell commands |
+
+Agents **only** get the tools you list. An agent with `tools: [file_read]` cannot write files or access the web, even though Claude Code normally has those capabilities. This is how AgentOS enforces capability-based security at the orchestration layer.
+
+### What happens at runtime
+
+```
+$ agentos workflow run examples/quick_research.yaml --db run.db --param topic="AI regulation"
+
+  [12:00:01] START  quick_research (workflow_id: wf-abc123)
+  [12:00:01] RUN    research → researcher (claude-sonnet-4-6)
+                    Tools: Read, Glob, Grep, Write, Edit, WebSearch, WebFetch
+                    Workspace: /tmp/agentos/wf-abc123/shared/research/
+  [12:01:45] DONE   research → SUCCEEDED (tokens: 12,340 | cost: $0.04 | time: 104s)
+  [12:01:45] END    quick_research — 1/1 tasks succeeded
+
+  Results: /tmp/agentos/wf-abc123/shared/research/manifest.json
+```
+
+Behind the scenes, AgentOS ran:
+```
+claude --print --model claude-sonnet-4-6 \
+  --allowedTools "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch" \
+  --disallowedTools "Agent,TodoWrite,ToolSearch" \
+  --append-system-prompt "..." \
+  -p "Research AI regulation and produce a summary..."
+```
+
+The agent worked autonomously in its scoped workspace, produced a `manifest.json` with structured findings, and AgentOS recorded every state change in the event log.
 
 ## Features
 
