@@ -1,0 +1,66 @@
+{
+  "summary": "Researched the latest news on the future of energy in Brazil, finding 6 major developments covering renewables expansion, energy storage, green hydrogen, offshore wind, transmission infrastructure, and biofuels. Brazil is on track for 95% renewable electricity by 2026 with massive investment across all clean energy sectors.",
+  "findings": [
+    {
+      "finding": "Brazil's renewable electricity reached 88.2% and the IEA projects 95% by 2026. In 2025, 7,403 MW of new capacity was added (mostly solar and wind), with 9,142 MW expected in 2026 — a 23.4% increase. Solar now accounts for nearly a quarter of the electricity matrix.",
+      "confidence": "high",
+      "sources": [
+        "https://www.gnpw.com.br/en/energy-transition/sustainable-energy-in-2026-brazil-at-the-center-of-the-global-energy-transition/",
+        "https://www.industrialinfo.com/iirenergy/industry-news/article/brazil-boosts-power-output-in-2025-with-more-expected-in-2026--352073",
+        "https://www.iea.org/countries/brazil"
+      ]
+    },
+    {
+      "finding": "Energy storage is becoming central to Brazil's energy transition. The government approved MP 1.304 and plans the first battery-only auction. Projections show 7.2 GW of battery storage by 2040 with R$ 22 billion in investments by 2030.",
+      "confidence": "high",
+      "sources": [
+        "https://odysseyenergysolutions.com/news-insights/brazils-energy-transition-enters-a-new-phase-and-storage-moves-to-the-center",
+        "https://www.bnamericas.com/en/analysis/renewable-expansion-tests-the-limits-of-brazils-power-grid"
+      ]
+    },
+    {
+      "finding": "Petrobras will commission a 2-MW green hydrogen pilot plant in Q1 2026. Green hydrogen investments in Brazil projected to exceed R$ 64 billion, with 6.15 GW of electrolysis capacity in projects with FIDs planned for 2026.",
+      "confidence": "high",
+      "sources": [
+        "https://renewablesnow.com/news/petrobras-to-power-up-2-mw-green-hydrogen-pilot-plant-in-2026-871421/",
+        "https://bioenergytimes.com/petrobras-expects-to-commission-its-inaugural-pilot-green-hydrogen-plant-in-2026/",
+        "https://en.clickpetroleoegas.com.br/Investments-in-green-hydrogen-in-Brazil-could-exceed-R$64-billion-in-2026--with-direct-effects-on-industry--energy-transition--infrastructure--and-global-competitiveness.-HL1402/"
+      ]
+    },
+    {
+      "finding": "Brazil signed Law No. 15,097/2025 for offshore wind regulation but faces delays — regulatory guidelines may only come in H1 2026, risking postponement of the first offshore wind auction. Brazil plans to eventually install more offshore wind than the rest of the world has built combined.",
+      "confidence": "high",
+      "sources": [
+        "https://brazilenergyinsight.com/2025/10/08/brazil-risks-postponing-the-first-offshore-wind-auction-in-2026/",
+        "https://iclg.com/practice-areas/renewable-energy-laws-and-regulations/brazil",
+        "https://www.gem.wiki/Brazil_Atlantic_Coast_Offshore_Wind_Development"
+      ]
+    },
+    {
+      "finding": "Brazil is entering a major transmission infrastructure investment cycle, with two auctions in 2026 (R$ 5.7B and R$ 20B+) and up to R$ 120 billion in expansion through 2030. Over 1,900 renewable and storage projects worth US$ 629 billion are being tracked.",
+      "confidence": "high",
+      "sources": [
+        "https://www.power-technology.com/features/renewables-boom-aftermath-brazils-energy-sector-tackles-excess-power-supply-challenges/",
+        "https://about.bnef.com/insights/clean-energy/brazil-transition-factbook-2025-the-numbers-behind-the-ambition/"
+      ]
+    },
+    {
+      "finding": "Biofuels remain strong with ethanol supply set to average 660 kb/d in 2026. Brazil's pre-salt oil extraction has ~40% fewer emissions per barrel than the global average. Biomass is consolidated as a firm complementary power source.",
+      "confidence": "high",
+      "sources": [
+        "https://www.iea.org/countries/brazil",
+        "https://www.irena.org/Publications/2025/Nov/The-energy-transition-in-Brazil"
+      ]
+    }
+  ],
+  "open_questions": [
+    "Will Brazil's first offshore wind auction actually take place in 2026, or will regulatory delays push it further?",
+    "How will grid congestion issues be resolved as renewable capacity continues to grow rapidly?",
+    "What share of the R$ 64 billion in green hydrogen investment projections will materialize into actual FIDs?",
+    "How will nuclear energy factor into Brazil's long-term energy mix, given current lack of policy focus?"
+  ],
+  "files_produced": [
+    "energy_brazil_news.md",
+    "manifest.json"
+  ]
+}
