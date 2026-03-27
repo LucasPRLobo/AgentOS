@@ -34,6 +34,7 @@ def cli() -> None:
 from agentos.cli.gate import gate  # noqa: E402
 from agentos.cli.status import cost, events, replay, status  # noqa: E402
 from agentos.cli.workflow import workflow  # noqa: E402
+from agentos.cli.comms import board, message  # noqa: E402
 
 cli.add_command(workflow)
 cli.add_command(gate)
@@ -41,6 +42,8 @@ cli.add_command(status)
 cli.add_command(events)
 cli.add_command(cost)
 cli.add_command(replay)
+cli.add_command(board)
+cli.add_command(message)
 
 
 @cli.command()

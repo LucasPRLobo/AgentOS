@@ -243,7 +243,7 @@ class TestTaskOutputDefaults:
 
 class TestEventType:
     def test_count(self):
-        assert len(EventType) == 44
+        assert len(EventType) == 55
 
     def test_all_dotted_format(self):
         for et in EventType:

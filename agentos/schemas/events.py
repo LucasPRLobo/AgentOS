@@ -103,6 +103,21 @@ class EventType(StrEnum):
     # Manifest fallback
     MANIFEST_INFERRED = "manifest.inferred"
 
+    # Communication — Board (V2)
+    BOARD_POST_CREATED = "board.post_created"
+    BOARD_POST_PINNED = "board.post_pinned"
+    BOARD_POST_RESOLVED = "board.post_resolved"
+    BOARD_POST_ARCHIVED = "board.post_archived"
+    BOARD_POST_PROMOTED = "board.post_promoted"
+    BOARD_STATE_INJECTED = "board.state_injected"
+
+    # Communication — Direct Messaging (V2)
+    DIRECT_MESSAGE_SENT = "direct_message.sent"
+    DIRECT_MESSAGE_DELIVERED = "direct_message.delivered"
+    DIRECT_MESSAGE_ACKNOWLEDGED = "direct_message.acknowledged"
+    THREAD_CREATED = "thread.created"
+    MESSAGE_PROMOTED_TO_BOARD = "message.promoted_to_board"
+
 
 class Event(BaseModel):
     """Immutable event in the append-only log.

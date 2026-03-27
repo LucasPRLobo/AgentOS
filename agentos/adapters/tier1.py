@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ from agentos.schemas.task import (
     TaskOutput,
     TaskStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 # Maximum tool-call loop iterations to prevent runaway agents.
 MAX_ITERATIONS = 50
@@ -140,10 +143,84 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
 }
 
 
-def _filter_tools(allowed: list[str]) -> list[dict[str, Any]]:
+# Communication tools — available when a MessageBus is provided.
+COMMS_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "send_message": {
+        "name": "send_message",
+        "description": (
+            "Send a direct message to a team member or the human manager. "
+            "Use this to ask questions, share findings, or request help."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "Recipient agent name or 'human'",
+                },
+                "content": {"type": "string", "description": "Your message"},
+                "speech_act": {
+                    "type": "string",
+                    "enum": ["inform", "request", "propose"],
+                    "description": "Intent of your message",
+                    "default": "inform",
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "normal", "high"],
+                    "default": "normal",
+                },
+            },
+            "required": ["to", "content"],
+        },
+    },
+    "post_to_board": {
+        "name": "post_to_board",
+        "description": (
+            "Post a message to the workspace board visible to all team "
+            "members. Use this to share important findings, ask the team "
+            "a question, or record a decision."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "Post content"},
+                "section": {
+                    "type": "string",
+                    "enum": ["post", "question", "decision"],
+                    "default": "post",
+                },
+                "speech_act": {
+                    "type": "string",
+                    "enum": ["inform", "request", "propose"],
+                    "default": "inform",
+                },
+            },
+            "required": ["content"],
+        },
+    },
+    "read_board": {
+        "name": "read_board",
+        "description": (
+            "Read the full workspace board — announcements, team status, "
+            "recent posts, decisions, open questions, and alerts."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+}
+
+
+def _filter_tools(
+    allowed: list[str],
+    include_comms: bool = False,
+) -> list[dict[str, Any]]:
     """Return only the tool definitions matching the allowlist.
 
     task_complete is always included — it's the agent's way to signal done.
+    When *include_comms* is ``True``, communication tools are added.
     """
     tools = []
     for name in allowed:
@@ -152,6 +229,10 @@ def _filter_tools(allowed: list[str]) -> list[dict[str, Any]]:
     # Always include task_complete
     if "task_complete" not in allowed:
         tools.append(TOOL_DEFINITIONS["task_complete"])
+    # Add communication tools when a message bus is present
+    if include_comms:
+        for defn in COMMS_TOOL_DEFINITIONS.values():
+            tools.append(defn)
     return tools
 
 
@@ -178,6 +259,9 @@ class Tier1Adapter(AgentAdapter):
         agent_id: str,
         *,
         tool_handler: Any | None = None,
+        message_bus: Any | None = None,
+        board_manager: Any | None = None,
+        ambient_injector: Any | None = None,
     ) -> None:
         self._client = client
         self._model = model
@@ -185,6 +269,12 @@ class Tier1Adapter(AgentAdapter):
         self._agent_id = agent_id
         self._tool_handler = tool_handler
         self._terminated = False
+
+        # Communication components (optional — comms features activate when set)
+        self._message_bus = message_bus
+        self._board_manager = board_manager
+        self._ambient_injector = ambient_injector
+        self._last_board_version: int | None = None
 
     async def execute_task(
         self,
@@ -196,9 +286,10 @@ class Tier1Adapter(AgentAdapter):
     ) -> TaskOutput:
         """Run the tool-calling loop and return structured output."""
         start_time = time.monotonic()
+        has_comms = self._message_bus is not None
 
         system = _build_system_prompt(role, predecessor_context, allowed_tools)
-        tools = _filter_tools(allowed_tools)
+        tools = _filter_tools(allowed_tools, include_comms=has_comms)
         messages: list[dict[str, Any]] = [
             {"role": "user", "content": task_description},
         ]
@@ -210,6 +301,10 @@ class Tier1Adapter(AgentAdapter):
         for _ in range(MAX_ITERATIONS):
             if self._terminated:
                 break
+
+            # --- Ambient awareness: inject board + pending messages ---
+            if has_comms:
+                self._inject_comms(messages)
 
             response = self._client.messages.create(
                 model=self._model,
@@ -299,6 +394,10 @@ class Tier1Adapter(AgentAdapter):
         workspace: Path,
     ) -> str:
         """Dispatch a tool call. Uses custom handler if provided, else returns stub."""
+        # --- Communication tools (handled before custom handler) ---
+        if tool_name in COMMS_TOOL_DEFINITIONS:
+            return self._handle_comms_tool(tool_name, tool_input)
+
         if self._tool_handler is not None:
             return self._tool_handler(tool_name, tool_input, workspace)
 
@@ -322,6 +421,90 @@ class Tier1Adapter(AgentAdapter):
             return f"[stub] web_search not available in this context: {tool_input['query']}"
 
         return f"Unknown tool: {tool_name}"
+
+    # ------------------------------------------------------------------
+    # Communication helpers
+    # ------------------------------------------------------------------
+
+    def _inject_comms(self, messages: list[dict[str, Any]]) -> None:
+        """Inject board state and pending messages into the conversation.
+
+        Called at each iteration boundary — this is how the agent
+        "glances at the board" (Google ADK yield/resume pattern).
+        """
+        if self._ambient_injector is None and self._message_bus is None:
+            return
+
+        pending_msgs = None
+        if self._message_bus is not None:
+            pending_msgs = self._message_bus.receive(self._agent_id)
+            if not pending_msgs:
+                pending_msgs = None
+
+        injection: str | None = None
+        if self._ambient_injector is not None:
+            injection = self._ambient_injector.build_injection(
+                agent_id=self._agent_id,
+                pending_messages=pending_msgs,
+                last_seen_board_version=self._last_board_version,
+            )
+            if injection:
+                state = self._board_manager.get_state() if self._board_manager else None
+                if state:
+                    self._last_board_version = state.version
+        elif pending_msgs:
+            # No ambient injector but we have a message bus — inject msgs only
+            from agentos.comms.ambient_context import AmbientContextInjector
+            injection = AmbientContextInjector.format_message_injection(pending_msgs)
+
+        if injection:
+            messages.append({"role": "user", "content": injection})
+
+    def _handle_comms_tool(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+    ) -> str:
+        """Handle communication tool calls."""
+        if tool_name == "send_message":
+            if self._message_bus is None:
+                return "Communication not available in this workflow."
+            from agentos.comms.schemas import DirectMessage, MessagePriority, SpeechAct
+
+            msg = DirectMessage(
+                sender_type="agent",
+                sender_id=self._agent_id,
+                recipient_type="human" if tool_input["to"] == "human" else "agent",
+                recipient_id=tool_input["to"],
+                content=tool_input["content"],
+                speech_act=SpeechAct(tool_input.get("speech_act", "inform")),
+                priority=MessagePriority(tool_input.get("priority", "normal")),
+                workflow_id=self._message_bus._workflow_id,
+            )
+            mid = self._message_bus.send(msg)
+            return f"Message sent to {tool_input['to']} (id: {mid})"
+
+        if tool_name == "post_to_board":
+            if self._board_manager is None:
+                return "Board not available in this workflow."
+            from agentos.comms.schemas import BoardPost, BoardSection, SpeechAct
+
+            post = BoardPost(
+                section=BoardSection(tool_input.get("section", "post")),
+                author_type="agent",
+                author_id=self._agent_id,
+                content=tool_input["content"],
+                speech_act=SpeechAct(tool_input.get("speech_act", "inform")),
+            )
+            pid = self._board_manager.post(post)
+            return f"Posted to board section '{post.section}' (id: {pid})"
+
+        if tool_name == "read_board":
+            if self._board_manager is None:
+                return "Board not available in this workflow."
+            return self._board_manager.render_compact(max_tokens=500)
+
+        return f"Unknown comms tool: {tool_name}"
 
 
 def _extract_text(response: Any) -> str:

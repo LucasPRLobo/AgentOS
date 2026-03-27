@@ -135,6 +135,106 @@ def manifest_to_task_output(
     )
 
 
+# ---------------------------------------------------------------------------
+# Communication file helpers for Tier 2 workspace-based comms
+# ---------------------------------------------------------------------------
+
+
+def write_board_state(workspace: Path, board_manager: Any) -> None:
+    """Write current board state to ``.agentos/board.md`` in the workspace.
+
+    This gives Tier 2 subprocess agents a readable snapshot of the board
+    before they start work.
+    """
+    comms_dir = workspace / ".agentos"
+    comms_dir.mkdir(exist_ok=True)
+    board_path = comms_dir / "board.md"
+
+    state = board_manager.render_compact(max_tokens=400)
+    board_path.write_text(state)
+
+
+def write_inbox(workspace: Path, messages: list[Any]) -> None:
+    """Write pending direct messages as individual files in ``.agentos/inbox/``.
+
+    Each message becomes a markdown file the agent can read during execution.
+    """
+    inbox_dir = workspace / ".agentos" / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clear stale files
+    for existing in inbox_dir.glob("msg-*.md"):
+        existing.unlink()
+
+    for msg in messages:
+        path = inbox_dir / f"msg-{msg.message_id[:8]}.md"
+        lines = [
+            f"# Message from {msg.sender_id} ({msg.sender_type})",
+            f"**Speech act:** {msg.speech_act}",
+            f"**Priority:** {msg.priority}",
+            f"**Time:** {msg.timestamp}",
+            "",
+            msg.content,
+        ]
+        if msg.speech_act == "request":
+            lines.append("")
+            lines.append(
+                "> Response expected — write a reply file to `.agentos/outbox/`."
+            )
+        path.write_text("\n".join(lines))
+
+
+def read_outbox(workspace: Path) -> list[dict[str, Any]]:
+    """Read and parse outbox JSON files written by Tier 2 agents.
+
+    Agents write JSON files to ``.agentos/outbox/`` to send messages.
+    Expected format: ``{"to": "recipient", "content": "text", "speech_act": "inform"}``.
+    Files are deleted after reading.
+    """
+    outbox_dir = workspace / ".agentos" / "outbox"
+    if not outbox_dir.exists():
+        return []
+
+    results: list[dict[str, Any]] = []
+    for path in sorted(outbox_dir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text())
+            if isinstance(data, dict) and "to" in data and "content" in data:
+                results.append(data)
+            path.unlink()
+        except (json.JSONDecodeError, OSError):
+            path.unlink(missing_ok=True)
+    return results
+
+
+def write_comms_prompt_addition() -> str:
+    """Return the system prompt addition for Tier 2 workspace communication."""
+    return (
+        "\n\n## Team Communication\n"
+        "You are part of a collaborative workspace with other agents and a "
+        "human manager.\n"
+        "- **Before starting**, read `.agentos/board.md` for team context, "
+        "announcements, and alerts.\n"
+        "- **Check `.agentos/inbox/`** for direct messages from teammates.\n"
+        "- **To send a message**, write a JSON file to `.agentos/outbox/` with "
+        'format: `{"to": "agent_name or human", "content": "your message", '
+        '"speech_act": "inform|request|propose"}`\n'
+        "- **After major steps**, re-read the board and inbox for updates.\n"
+    )
+
+
+def cleanup_comms_files(workspace: Path) -> None:
+    """Remove communication files from workspace after task completion."""
+    comms_dir = workspace / ".agentos"
+    if not comms_dir.exists():
+        return
+    for subdir in ("inbox", "outbox"):
+        d = comms_dir / subdir
+        if d.exists():
+            for f in d.iterdir():
+                f.unlink(missing_ok=True)
+
+
 def extract_manifest_from_text(raw_output: str) -> dict[str, Any] | None:
     """Attempt to extract manifest-like data from agent's natural language output.
 
