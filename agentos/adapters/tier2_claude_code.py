@@ -315,6 +315,8 @@ class ClaudeCodeAdapter(AgentAdapter):
         seq: Any | None = None,
         workflow_id: str | None = None,
         claude_code_config: ClaudeCodeConfig | None = None,
+        message_bus: Any | None = None,
+        board_manager: Any | None = None,
     ) -> None:
         self._budget_manager = budget_manager
         self._agent_id = agent_id
@@ -327,6 +329,10 @@ class ClaudeCodeAdapter(AgentAdapter):
         self._run_subprocess = run_subprocess or subprocess.run
         self._log_fn = log_fn
         self._sandbox = sandbox_handle
+
+        # Communication components (optional — Phase 2)
+        self._message_bus = message_bus
+        self._board_manager = board_manager
         # Event log integration for dashboard streaming
         self._event_log = event_log
         self._seq = seq
@@ -402,6 +408,9 @@ class ClaudeCodeAdapter(AgentAdapter):
         # Write predecessor context files into workspace
         _write_predecessor_context(workspace, predecessor_context)
 
+        # --- Communication setup (Phase 2) ---
+        self._setup_comms(workspace)
+
         # Build workspace file index so agent doesn't waste turns exploring
         workspace_files: list[str] = []
         ws_root = workspace.parent  # workspace is ws_root/config.workspace/task_name
@@ -414,10 +423,18 @@ class ClaudeCodeAdapter(AgentAdapter):
             task_description, role, predecessor_context,
             workspace_files=workspace_files if workspace_files else None,
         )
+
+        # Append comms prompt if communication is enabled
+        if self._board_manager is not None or self._message_bus is not None:
+            from agentos.adapters.tier2_shared import write_comms_prompt_addition
+            prompt += write_comms_prompt_addition()
+
+        # Inject MCP comms server config if comms are enabled
+        config = self._get_comms_config(workspace)
         out_fmt = "stream-json" if self._use_streaming else "json"
         cmd = _build_command(prompt, allowed_tools, output_format=out_fmt,
                              max_turns=self._max_turns,
-                             claude_code_config=self._claude_code_config)
+                             claude_code_config=config)
         env = _build_env()
 
         total_tokens = 0
@@ -510,6 +527,9 @@ class ClaudeCodeAdapter(AgentAdapter):
                 )
 
             # Validate manifest
+            # Route outbox messages through comms system
+            self._finalize_comms(workspace)
+
             manifest = _parse_manifest(workspace)
             if manifest is not None:
                 metrics = TaskMetrics(
@@ -559,6 +579,103 @@ class ClaudeCodeAdapter(AgentAdapter):
             summary="Agent did not produce a valid manifest.json after retries.",
             metrics=metrics,
         )
+
+    # ------------------------------------------------------------------
+    # Communication helpers (Phase 2)
+    # ------------------------------------------------------------------
+
+    def _setup_comms(self, workspace: Path) -> None:
+        """Write comms state to workspace before agent launch."""
+        if self._board_manager is None and self._message_bus is None:
+            return
+
+        from agentos.comms.comms_state import write_comms_state
+
+        pending: list = []
+        if self._message_bus is not None:
+            pending = self._message_bus.receive(self._agent_id)
+
+        if self._board_manager is not None:
+            # Also write the board.md file for non-MCP fallback
+            from agentos.adapters.tier2_shared import write_board_state
+            write_board_state(workspace, self._board_manager)
+
+            write_comms_state(
+                workspace,
+                board_manager=self._board_manager,
+                pending_messages=pending,
+                agent_id=self._agent_id,
+                workflow_id=self._workflow_id or "",
+            )
+        elif pending:
+            from agentos.adapters.tier2_shared import write_inbox
+            write_inbox(workspace, pending)
+
+    def _get_comms_config(self, workspace: Path) -> ClaudeCodeConfig | None:
+        """Return a ClaudeCodeConfig with MCP comms server injected."""
+        if self._board_manager is None and self._message_bus is None:
+            return self._claude_code_config
+
+        import sys
+
+        mcp_json = json.dumps({
+            "mcpServers": {
+                "agentos-comms": {
+                    "command": sys.executable,
+                    "args": ["-m", "agentos.comms.mcp_server", "--workspace", str(workspace)],
+                    "env": {},
+                }
+            }
+        })
+
+        if self._claude_code_config is None:
+            return ClaudeCodeConfig(mcp_config=[mcp_json])
+
+        # Clone the config and add our MCP server
+        config = self._claude_code_config.model_copy(deep=True)
+        config.mcp_config = list(config.mcp_config) + [mcp_json]
+        return config
+
+    def _finalize_comms(self, workspace: Path) -> None:
+        """Read outbox and route messages through comms system after task."""
+        if self._board_manager is None and self._message_bus is None:
+            return
+
+        from agentos.adapters.tier2_shared import read_outbox
+        from agentos.comms.schemas import (
+            BoardPost,
+            BoardSection,
+            DirectMessage,
+            MessagePriority,
+            SpeechAct,
+        )
+
+        outbox_msgs = read_outbox(workspace)
+        for msg_data in outbox_msgs:
+            target = msg_data.get("to", "")
+            content = msg_data.get("content", "")
+            if not content:
+                continue
+
+            if target == "board" and self._board_manager is not None:
+                self._board_manager.post(BoardPost(
+                    section=BoardSection(msg_data.get("section", "post")),
+                    author_type="agent",
+                    author_id=self._agent_id,
+                    content=content,
+                    speech_act=SpeechAct(msg_data.get("speech_act", "inform")),
+                ))
+            elif self._message_bus is not None:
+                self._message_bus.send(DirectMessage(
+                    sender_type="agent",
+                    sender_id=self._agent_id,
+                    recipient_type="human" if target == "human" else "agent",
+                    recipient_id=target,
+                    content=content,
+                    speech_act=SpeechAct(msg_data.get("speech_act", "inform")),
+                    priority=MessagePriority(msg_data.get("priority", "normal")),
+                    workflow_id=self._workflow_id or "",
+                ))
 
     async def terminate(self) -> None:
         """Signal the adapter to stop and terminate any running process."""

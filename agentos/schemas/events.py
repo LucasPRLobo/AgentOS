@@ -118,6 +118,11 @@ class EventType(StrEnum):
     THREAD_CREATED = "thread.created"
     MESSAGE_PROMOTED_TO_BOARD = "message.promoted_to_board"
 
+    # Communication — Protocols (V2)
+    PROTOCOL_STARTED = "protocol.started"
+    PROTOCOL_RESOLVED = "protocol.resolved"
+    PROTOCOL_TIMEOUT = "protocol.timeout"
+
 
 class Event(BaseModel):
     """Immutable event in the append-only log.
