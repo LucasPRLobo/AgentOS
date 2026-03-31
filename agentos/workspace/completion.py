@@ -20,6 +20,10 @@ from agentos.workspace.schemas import (
 class CompletionDetector:
     """Layered completion detection for workspaces."""
 
+    # Diminishing returns: if N+ consecutive completions produce minimal output
+    _DIMINISHING_THRESHOLD_CHARS = 200  # Minimum chars per completion to count as progress
+    _DIMINISHING_CONSECUTIVE = 3        # N consecutive low-output completions = stall
+
     def __init__(
         self,
         config: WorkspaceConfig,
@@ -32,6 +36,8 @@ class CompletionDetector:
         self._budget_usage = budget_usage or BudgetUsage()
         self._max_tasks = max_tasks
         self._initial_task_count: int | None = None
+        # Diminishing returns tracking
+        self._recent_outputs: list[int] = []  # char counts of recent task outputs
 
     def set_initial_task_count(self, count: int) -> None:
         self._initial_task_count = count
@@ -39,11 +45,22 @@ class CompletionDetector:
     def update_budget_usage(self, usage: BudgetUsage) -> None:
         self._budget_usage = usage
 
+    def record_task_output(self, output_chars: int) -> None:
+        """Record the size of a task's output for diminishing returns detection."""
+        self._recent_outputs.append(output_chars)
+        if len(self._recent_outputs) > self._DIMINISHING_CONSECUTIVE * 2:
+            self._recent_outputs = self._recent_outputs[-self._DIMINISHING_CONSECUTIVE * 2:]
+
     def check(self) -> CompletionResult:
         """Run all layers in order. Return first triggered result."""
         # Layer 1: Hard limits
         result = self._check_hard_limits()
         if result.complete or result.reason:
+            return result
+
+        # Layer 1b: Diminishing returns (safety net)
+        result = self._check_diminishing_returns()
+        if result.reason:
             return result
 
         # Layer 4: Scope management (check before goal satisfaction — scope creep overrides)
@@ -137,6 +154,30 @@ class CompletionDetector:
             recommendation="All tasks complete. Acceptance criteria should be evaluated "
                            "by coordinator or human.",
         )
+
+    def _check_diminishing_returns(self) -> CompletionResult:
+        """Detect when agents are producing minimal output per completion."""
+        if len(self._recent_outputs) < self._DIMINISHING_CONSECUTIVE:
+            return CompletionResult()
+
+        recent = self._recent_outputs[-self._DIMINISHING_CONSECUTIVE:]
+        if all(c < self._DIMINISHING_THRESHOLD_CHARS for c in recent):
+            return CompletionResult(
+                complete=False,
+                reason="diminishing_returns",
+                layer=1,
+                details={
+                    "consecutive_low_output": len(recent),
+                    "threshold_chars": self._DIMINISHING_THRESHOLD_CHARS,
+                    "recent_output_chars": recent,
+                },
+                recommendation=(
+                    f"Last {len(recent)} task completions produced minimal output "
+                    f"(<{self._DIMINISHING_THRESHOLD_CHARS} chars each). "
+                    f"Agents may be spinning without progress. Consider human review."
+                ),
+            )
+        return CompletionResult()
 
     def _check_scope(self) -> CompletionResult:
         if self._initial_task_count is None:

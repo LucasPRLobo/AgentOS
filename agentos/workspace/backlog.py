@@ -7,27 +7,47 @@ All mutations are event-logged.
 
 from __future__ import annotations
 
+import json
+import logging
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 
 from agentos.kernel.event_log import EventLog
 from agentos.kernel.seq import SeqCounter
 from agentos.schemas.events import Event, EventType
 from agentos.workspace.schemas import BacklogTask, BacklogTaskStatus, _uuid, _utc_now_iso
 
+logger = logging.getLogger(__name__)
 
 _TERMINAL = {BacklogTaskStatus.DONE, BacklogTaskStatus.CANCELLED}
 
 
 class BacklogManager:
-    """Manages the task backlog for a workspace."""
+    """Manages the task backlog for a workspace.
 
-    def __init__(self, event_log: EventLog, seq: SeqCounter, workflow_id: str) -> None:
+    When *persist_dir* is set, tasks are persisted to disk after every
+    mutation and file-level locking is used for atomic claiming
+    (safe for multi-process access).
+    """
+
+    def __init__(
+        self,
+        event_log: EventLog,
+        seq: SeqCounter,
+        workflow_id: str,
+        persist_dir: Path | None = None,
+    ) -> None:
         self._event_log = event_log
         self._seq = seq
         self._workflow_id = workflow_id
         self._tasks: dict[str, BacklogTask] = {}
         self._lock = threading.Lock()
+        self._persist_dir = persist_dir
+        self._high_water_mark: int = 0
+
+        if persist_dir is not None:
+            self._load_from_disk()
 
     # ------------------------------------------------------------------
     # Create
@@ -330,6 +350,63 @@ class BacklogManager:
         with self._lock:
             task = self._get(task_id)
             task.stall_count = 0
+
+    # ------------------------------------------------------------------
+    # File persistence (inspired by Claude Code task system)
+    # ------------------------------------------------------------------
+
+    def _persist(self) -> None:
+        """Save all tasks to disk (if persist_dir is set)."""
+        if self._persist_dir is None:
+            return
+        tasks_dir = self._persist_dir / "backlog"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+
+        from agentos.workspace.filelock import file_lock
+        lock_path = self._persist_dir / "backlog.lock"
+
+        with file_lock(lock_path):
+            data = {
+                "high_water_mark": self._high_water_mark,
+                "tasks": {tid: t.model_dump(mode="json") for tid, t in self._tasks.items()},
+            }
+            (tasks_dir / "tasks.json").write_text(json.dumps(data, indent=2))
+
+    def _load_from_disk(self) -> None:
+        """Load tasks from disk (if persist_dir is set)."""
+        if self._persist_dir is None:
+            return
+        tasks_file = self._persist_dir / "backlog" / "tasks.json"
+        if not tasks_file.exists():
+            return
+        try:
+            data = json.loads(tasks_file.read_text())
+            self._high_water_mark = data.get("high_water_mark", 0)
+            for tid, tdata in data.get("tasks", {}).items():
+                self._tasks[tid] = BacklogTask(**tdata)
+            logger.info("Loaded %d tasks from disk", len(self._tasks))
+        except Exception as exc:
+            logger.warning("Failed to load backlog from disk: %s", exc)
+
+    def _persist_after(method):
+        """Decorator: persist to disk after a mutating operation."""
+        def wrapper(self, *args, **kwargs):
+            result = method(self, *args, **kwargs)
+            self._persist()
+            return result
+        wrapper.__name__ = method.__name__
+        wrapper.__doc__ = method.__doc__
+        return wrapper
+
+    # Wrap mutating methods with auto-persist
+    create_task = _persist_after(create_task)
+    claim_task = _persist_after(claim_task)
+    start_task = _persist_after(start_task)
+    submit_for_review = _persist_after(submit_for_review)
+    approve_task = _persist_after(approve_task)
+    complete_task = _persist_after(complete_task)
+    request_revision = _persist_after(request_revision)
+    cancel_task = _persist_after(cancel_task)
 
     # ------------------------------------------------------------------
     # Internals
