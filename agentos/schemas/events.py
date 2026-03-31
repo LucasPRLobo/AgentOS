@@ -123,6 +123,12 @@ class EventType(StrEnum):
     PROTOCOL_RESOLVED = "protocol.resolved"
     PROTOCOL_TIMEOUT = "protocol.timeout"
 
+    # Discussions (V3)
+    DISCUSSION_OPENED = "discussion.opened"
+    DISCUSSION_MESSAGE = "discussion.message"
+    DISCUSSION_RESOLVED = "discussion.resolved"
+    DISCUSSION_DEFERRED = "discussion.deferred"
+
     # Workspace Runtime (V3)
     WORKSPACE_CREATED = "workspace.created"
     WORKSPACE_PAUSED = "workspace.paused"

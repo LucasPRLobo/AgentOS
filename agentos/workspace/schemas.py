@@ -84,12 +84,15 @@ class WorkspaceConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 class BacklogTaskStatus(StrEnum):
-    OPEN = "open"
+    PROPOSED = "proposed"             # Coordinator proposed, not yet discussed
+    SPECIFYING = "specifying"         # Spec discussion in progress
+    OPEN = "open"                     # Spec agreed, ready to claim
     CLAIMED = "claimed"
     IN_PROGRESS = "in_progress"
-    IN_REVIEW = "in_review"
+    COMPLETED = "completed"           # Agent done, awaiting review
+    IN_REVIEW = "in_review"           # Review discussion in progress
     REVISION_NEEDED = "revision_needed"
-    DONE = "done"
+    DONE = "done"                     # Review passed, accepted
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
 
@@ -104,6 +107,16 @@ class BacklogTask(BaseModel):
     assigned_to: str | None = None
     suggested_for: str | None = None
     required_role: str | None = None
+
+    # Specification (from discussion)
+    spec: str | None = None
+    spec_approach: str | None = None
+    spec_expected_output: str | None = None
+    spec_discussion_id: str | None = None
+
+    # Review (from discussion)
+    review_discussion_id: str | None = None
+    review_verdict: str | None = None
 
     # Status
     status: BacklogTaskStatus = Field(default=BacklogTaskStatus.OPEN)

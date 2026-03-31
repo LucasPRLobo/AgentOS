@@ -198,6 +198,82 @@ class BacklogManager:
         })
 
     # ------------------------------------------------------------------
+    # Specification lifecycle (discussion-driven)
+    # ------------------------------------------------------------------
+
+    def propose_task(self, task: BacklogTask) -> str:
+        """Create a task in PROPOSED status (not yet discussed)."""
+        task.status = BacklogTaskStatus.PROPOSED
+        return self.create_task(task)
+
+    def start_specifying(self, task_id: str, discussion_id: str) -> None:
+        """Move to SPECIFYING — spec discussion opened."""
+        with self._lock:
+            task = self._get(task_id)
+            if task.status != BacklogTaskStatus.PROPOSED:
+                raise ValueError(f"Cannot specify {task_id}: status is {task.status}")
+            task.status = BacklogTaskStatus.SPECIFYING
+            task.spec_discussion_id = discussion_id
+
+    def finalize_spec(
+        self, task_id: str, spec: str,
+        approach: str = "", expected_output: str = "",
+    ) -> None:
+        """Spec agreed — move to OPEN (ready to claim)."""
+        with self._lock:
+            task = self._get(task_id)
+            if task.status not in (BacklogTaskStatus.PROPOSED, BacklogTaskStatus.SPECIFYING):
+                raise ValueError(f"Cannot finalize spec for {task_id}: status is {task.status}")
+            task.spec = spec
+            task.spec_approach = approach
+            task.spec_expected_output = expected_output
+            task.status = BacklogTaskStatus.OPEN
+            # Check dependencies — might need to block
+            if task.depends_on:
+                all_met = all(
+                    self._tasks.get(d) and self._tasks[d].status == BacklogTaskStatus.DONE
+                    for d in task.depends_on
+                )
+                if not all_met:
+                    task.status = BacklogTaskStatus.BLOCKED
+
+    def mark_completed(self, task_id: str, output: dict | None = None) -> None:
+        """Agent says done — move to COMPLETED (awaiting review)."""
+        with self._lock:
+            task = self._get(task_id)
+            if task.status != BacklogTaskStatus.IN_PROGRESS:
+                raise ValueError(f"Cannot mark completed {task_id}: status is {task.status}")
+            task.status = BacklogTaskStatus.COMPLETED
+            if output:
+                task.output = output
+
+    def start_review(self, task_id: str, discussion_id: str) -> None:
+        """Review discussion opened — move to IN_REVIEW."""
+        with self._lock:
+            task = self._get(task_id)
+            if task.status != BacklogTaskStatus.COMPLETED:
+                raise ValueError(f"Cannot review {task_id}: status is {task.status}")
+            task.status = BacklogTaskStatus.IN_REVIEW
+            task.review_discussion_id = discussion_id
+            task.review_count += 1
+
+    def accept_review(self, task_id: str, verdict: str = "accepted") -> None:
+        """Review passed — move to DONE."""
+        with self._lock:
+            task = self._get(task_id)
+            if task.status != BacklogTaskStatus.IN_REVIEW:
+                raise ValueError(f"Cannot accept {task_id}: status is {task.status}")
+            task.status = BacklogTaskStatus.DONE
+            task.review_verdict = verdict
+            task.completed_at = _utc_now_iso()
+
+        self._emit(EventType.BACKLOG_TASK_APPROVED, {
+            "task_id": task_id, "verdict": verdict,
+        })
+        self.unblock_dependents(task_id)
+        self.chain_next(task_id)
+
+    # ------------------------------------------------------------------
     # Dependencies
     # ------------------------------------------------------------------
 
