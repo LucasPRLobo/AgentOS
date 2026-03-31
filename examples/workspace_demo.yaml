@@ -1,0 +1,40 @@
+workspace:
+  name: "AI Protocol Research"
+  goal: "Research AI agent communication protocols and produce a brief report comparing A2A and MCP"
+  description: |
+    Investigate Google's A2A protocol and Anthropic's MCP protocol.
+    Compare their approaches, identify how they complement each other,
+    and produce a concise summary report.
+
+  team_mode: dynamic
+
+  budget:
+    max_cost_usd: 5.00
+    max_tokens: 500000
+
+  coordinator:
+    model: opus
+    authority: suggest
+    auto_decompose: true
+
+  team:
+    - name: researcher
+      type: agent
+      roles: [worker]
+      specialization: "Protocol research and analysis"
+      adapter: tier2_claude_code
+
+    - name: writer
+      type: agent
+      roles: [worker]
+      specialization: "Technical writing and report generation"
+      adapter: tier2_claude_code
+
+    - name: human
+      type: human
+      roles: [lead, reviewer]
+
+  acceptance_criteria:
+    - "Research findings produced for both A2A and MCP"
+    - "Comparison report written"
+    - "Human lead has reviewed the output"

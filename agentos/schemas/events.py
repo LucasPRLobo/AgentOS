@@ -123,6 +123,22 @@ class EventType(StrEnum):
     PROTOCOL_RESOLVED = "protocol.resolved"
     PROTOCOL_TIMEOUT = "protocol.timeout"
 
+    # Workspace Runtime (V3)
+    WORKSPACE_CREATED = "workspace.created"
+    WORKSPACE_PAUSED = "workspace.paused"
+    WORKSPACE_COMPLETED = "workspace.completed"
+    WORKSPACE_TEAM_CHANGED = "workspace.team_changed"
+    BACKLOG_TASK_CREATED = "backlog.task_created"
+    BACKLOG_TASK_CLAIMED = "backlog.task_claimed"
+    BACKLOG_TASK_STARTED = "backlog.task_started"
+    BACKLOG_TASK_SUBMITTED = "backlog.task_submitted"
+    BACKLOG_TASK_APPROVED = "backlog.task_approved"
+    BACKLOG_TASK_REVISION = "backlog.task_revision"
+    BACKLOG_TASK_CANCELLED = "backlog.task_cancelled"
+    BACKLOG_TASK_UNBLOCKED = "backlog.task_unblocked"
+    ASSISTANT_SPAWNED = "assistant.spawned"
+    ASSISTANT_COMPLETED = "assistant.completed"
+
 
 class Event(BaseModel):
     """Immutable event in the append-only log.
