@@ -208,6 +208,7 @@ class WorkspaceRuntime:
         self,
         coordinator_llm: Callable | None = None,
         max_cycles: int = 50,
+        use_coordinator_agent: bool = True,
     ) -> dict:
         """Run the workspace autonomously until completion or budget exhaustion.
 
@@ -216,8 +217,9 @@ class WorkspaceRuntime:
         3. Check completion after each task
         4. Persist state after each cycle
 
-        *coordinator_llm*: async callable(system, prompt) → str for coordinator.
-        If None, tasks must be added manually before calling run().
+        When *use_coordinator_agent* is True (default), the coordinator runs
+        as a Claude Code instance with MCP comms tools — same infrastructure
+        as workers. Falls back to *coordinator_llm* (raw API callable) if set.
 
         Returns a dict with completion result and summary.
         """
@@ -226,24 +228,12 @@ class WorkspaceRuntime:
             self._config.coordinator.enabled
             and self._config.coordinator.auto_decompose
             and not self._backlog.get_all_tasks()
-            and coordinator_llm is not None
         ):
-            from agentos.workspace.coordinator import CoordinatorAgent
-
-            self._coordinator = CoordinatorAgent(
-                config=self._config.coordinator,
-                workspace_config=self._config,
-                backlog=self._backlog,
-                board=self._board,
-                bus=self._bus,
-                event_log=self._event_log,
-                seq=self._seq,
-                workflow_id=self._workflow_id,
-                llm_call=coordinator_llm,
+            tasks = await self._run_coordinator_decomposition(
+                coordinator_llm, use_coordinator_agent,
             )
-            tasks = await self._coordinator.decompose_goal()
-            self._completion.set_initial_task_count(len(tasks))
-            logger.info("Coordinator decomposed goal into %d tasks", len(tasks))
+            if tasks:
+                self._completion.set_initial_task_count(len(tasks))
 
         # Main loop
         for cycle in range(max_cycles):
@@ -409,6 +399,51 @@ class WorkspaceRuntime:
             self._state,
             self._backlog.get_all_tasks(),
         )
+
+    async def _run_coordinator_decomposition(
+        self,
+        coordinator_llm: Callable | None,
+        use_coordinator_agent: bool,
+    ) -> list[BacklogTask]:
+        """Run the coordinator to decompose the goal into tasks."""
+        # Option 1: Claude Code instance as coordinator (preferred)
+        if use_coordinator_agent and self._workspace_dir is not None:
+            from agentos.workspace.coordinator_runner import run_decomposition
+
+            tasks = run_decomposition(
+                config=self._config,
+                workspace=self._workspace_dir,
+                board=self._board,
+                bus=self._bus,
+                backlog=self._backlog,
+                workflow_id=self._workflow_id,
+            )
+            if tasks:
+                logger.info("Coordinator (Claude Code) created %d tasks", len(tasks))
+                return tasks
+            logger.warning("Coordinator produced no tasks — falling back")
+
+        # Option 2: Raw LLM call (fallback)
+        if coordinator_llm is not None:
+            from agentos.workspace.coordinator import CoordinatorAgent
+
+            self._coordinator = CoordinatorAgent(
+                config=self._config.coordinator,
+                workspace_config=self._config,
+                backlog=self._backlog,
+                board=self._board,
+                bus=self._bus,
+                event_log=self._event_log,
+                seq=self._seq,
+                workflow_id=self._workflow_id,
+                llm_call=coordinator_llm,
+            )
+            tasks = await self._coordinator.decompose_goal()
+            logger.info("Coordinator (API) created %d tasks", len(tasks))
+            return tasks
+
+        logger.info("No coordinator configured — tasks must be added manually")
+        return []
 
     async def _default_execute(
         self,

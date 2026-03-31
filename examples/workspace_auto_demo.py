@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Autonomous workspace demo — runtime.run() handles everything.
+"""Autonomous workspace demo — fully end-to-end with Claude Code coordinator.
 
 Usage:
-    python examples/workspace_auto_demo.py
+    python examples/workspace_auto_demo.py [--manual-tasks]
 
-This demonstrates the fully wired runtime:
-1. Load workspace config from YAML
-2. Call runtime.run() — that's it
-3. Coordinator decomposes, workers execute, completion detected
+Without --manual-tasks (default):
+    The coordinator runs as a Claude Code instance, reads the goal,
+    decomposes it into tasks, and writes tasks.json. Workers then
+    execute autonomously.
+
+With --manual-tasks:
+    Tasks are added manually (skips the coordinator LLM call).
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import subprocess
 import sys
 import tempfile
@@ -31,6 +33,8 @@ DEMO_YAML = Path(__file__).parent / "workspace_demo.yaml"
 
 
 async def main():
+    manual_tasks = "--manual-tasks" in sys.argv
+
     # Check claude CLI
     try:
         r = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
@@ -51,52 +55,63 @@ async def main():
         runtime.start()
 
         print("=" * 60)
-        print("AgentOS Workspace — Autonomous Demo")
+        if manual_tasks:
+            print("AgentOS Workspace — Autonomous Demo (manual tasks)")
+        else:
+            print("AgentOS Workspace — Full End-to-End Demo")
+            print("Coordinator: Claude Code instance")
         print("=" * 60)
         print(f"Goal: {config.goal}")
         print(f"Team: {', '.join(p.name for p in config.team)}")
         print()
 
-        # Add tasks manually (in production, coordinator does this via LLM)
-        # We skip the LLM call for the demo to avoid extra cost.
-        tasks = [
-            BacklogTask(
-                title="Research A2A Protocol",
-                description="Research Google's A2A protocol. Write findings to a2a_research.md.",
-                created_by="coordinator",
-                suggested_for="researcher",
-                estimated_minutes=10,
-                priority="high",
-            ),
-            BacklogTask(
-                title="Research MCP Protocol",
-                description="Research Anthropic's MCP protocol. Write findings to mcp_research.md.",
-                created_by="coordinator",
-                suggested_for="researcher",
-                estimated_minutes=10,
-                priority="high",
-            ),
-        ]
-        research_ids = [runtime.add_task(t) for t in tasks]
+        if manual_tasks:
+            # Add tasks manually (skip coordinator LLM call)
+            tasks = [
+                BacklogTask(
+                    title="Research A2A Protocol",
+                    description="Research Google's A2A protocol. Write findings to a2a_research.md.",
+                    created_by="coordinator",
+                    suggested_for="researcher",
+                    estimated_minutes=10,
+                    priority="high",
+                ),
+                BacklogTask(
+                    title="Research MCP Protocol",
+                    description="Research Anthropic's MCP protocol. Write findings to mcp_research.md.",
+                    created_by="coordinator",
+                    suggested_for="researcher",
+                    estimated_minutes=10,
+                    priority="high",
+                ),
+            ]
+            research_ids = [runtime.add_task(t) for t in tasks]
 
-        report = BacklogTask(
-            title="Write Comparison Report",
-            description="Compare A2A and MCP using the research files. Write report.md.",
-            created_by="coordinator",
-            suggested_for="writer",
-            depends_on=research_ids,
-            priority="normal",
-        )
-        runtime.add_task(report)
-        runtime.backlog.recompute_priorities()
+            report = BacklogTask(
+                title="Write Comparison Report",
+                description="Compare A2A and MCP using the research files. Write report.md.",
+                created_by="coordinator",
+                suggested_for="writer",
+                depends_on=research_ids,
+                priority="normal",
+            )
+            runtime.add_task(report)
+            runtime.backlog.recompute_priorities()
+            print(f"Tasks added manually: {runtime.get_backlog_summary()}")
+        else:
+            print("Coordinator will decompose the goal using Claude Code...")
 
-        print(f"Backlog: {runtime.get_backlog_summary()}")
         print()
 
-        # Run autonomously — this is the key line
+        # Run autonomously
+        # use_coordinator_agent=True → coordinator is a Claude Code instance
+        # use_coordinator_agent=False → would need coordinator_llm callable
         print("Running autonomously...")
         print("-" * 60)
-        result = await runtime.run(max_cycles=10)
+        result = await runtime.run(
+            max_cycles=15,
+            use_coordinator_agent=not manual_tasks,
+        )
         print("-" * 60)
 
         # Results
@@ -118,16 +133,17 @@ async def main():
         print("FILES")
         print("=" * 60)
         for f in sorted(workspace.rglob("*")):
-            if f.is_file() and ".agentos" not in str(f):
+            if f.is_file() and ".agentos" not in str(f) and "_coordinator_output" not in str(f):
                 print(f"  {f.relative_to(workspace)} ({f.stat().st_size} bytes)")
 
-        # Show report
-        report_file = workspace / "report.md"
-        if report_file.exists():
-            print(f"\n{'=' * 60}")
-            print("REPORT")
-            print("=" * 60)
-            print(report_file.read_text()[:800])
+        # Show report or any produced files
+        for name in ("report.md", "a2a_research.md", "mcp_research.md"):
+            fpath = workspace / name
+            if fpath.exists():
+                print(f"\n{'=' * 60}")
+                print(f"{name.upper()}")
+                print("=" * 60)
+                print(fpath.read_text()[:500])
 
         print("\nDone.")
 
