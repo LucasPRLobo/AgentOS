@@ -71,12 +71,14 @@ class WorkspaceRuntime:
         workflow_id: str,
         workspace_dir: Path | None = None,
         execute_fn: Callable | None = None,
+        project_dir: Path | None = None,
     ) -> None:
         self._config = config
         self._event_log = event_log
         self._seq = seq
         self._workflow_id = workflow_id
         self._workspace_dir = workspace_dir
+        self._project_dir = project_dir  # Actual codebase root for --add-dir
         # Pluggable agent execution: async fn(agent_id, task, workspace) → dict
         self._execute_fn = execute_fn or self._default_execute
 
@@ -98,6 +100,19 @@ class WorkspaceRuntime:
         self._cost_tracker = CostTracker(config.budget)
         self._completion = CompletionDetector(config, self._backlog)
 
+        # Collaborative components
+        from agentos.comms.discussions import DiscussionManager
+        from agentos.workspace.artifacts import ProjectArtifacts
+        from agentos.workspace.context_curator import ContextCurator
+        from agentos.workspace.verifier import TaskVerifier
+
+        self._discussions = DiscussionManager(
+            event_log, seq, workflow_id, self._bus, self._board,
+        )
+        self._artifacts = ProjectArtifacts(workspace_dir) if workspace_dir else None
+        self._curator = ContextCurator(config, self._backlog, self._discussions, self._artifacts)
+        self._verifier = TaskVerifier()
+
         # Hooks
         self._hooks = WorkspaceHookManager()
         register_default_hooks(self._hooks)
@@ -107,6 +122,11 @@ class WorkspaceRuntime:
 
         # Coordinator (created on start if enabled)
         self._coordinator = None
+
+        # Callback for human input (set by CLI/dashboard)
+        self._human_input_fn: Callable | None = None
+        # Callback for status messages (set by CLI/dashboard)
+        self._status_fn: Callable | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -131,6 +151,14 @@ class WorkspaceRuntime:
     @property
     def state(self) -> WorkspaceState:
         return self._state
+
+    @property
+    def discussions(self):
+        return self._discussions
+
+    @property
+    def artifacts(self):
+        return self._artifacts
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -204,41 +232,112 @@ class WorkspaceRuntime:
     # Autonomous run loop
     # ------------------------------------------------------------------
 
+    def set_human_input(self, fn: Callable) -> None:
+        """Set a callback for getting human input during discussions.
+
+        *fn*: callable(prompt: str, options: list[str] | None) → str
+        Used by CLI/dashboard to collect human responses.
+        If not set, discussions auto-resolve after posting to board.
+        """
+        self._human_input_fn = fn
+
+    def set_status_callback(self, fn: Callable) -> None:
+        """Set a callback for status updates: fn(message: str, verb: str).
+
+        *verb* is an action word like "Planning", "Executing", "Reviewing".
+        Used by CLI to show what the system is doing.
+        """
+        self._status_fn = fn
+
+    def _status(self, message: str, verb: str = "Working") -> None:
+        """Emit a status update to the UI."""
+        if self._status_fn:
+            self._status_fn(message, verb)
+        logger.info("[%s] %s", verb, message)
+
+    async def run_concurrent(
+        self,
+        supervisor_config: Any = None,
+        on_event: Callable | None = None,
+    ) -> dict:
+        """Run workspace with concurrent agent execution (the real vision).
+
+        Agents run simultaneously. The human participates via commands.json.
+        The supervisor polls every 2-3 seconds, routing messages and spawning
+        agents as needed.
+        """
+        from agentos.workspace.schemas import SupervisorConfig
+        from agentos.workspace.supervisor import WorkspaceSupervisor
+
+        config = supervisor_config or SupervisorConfig()
+        supervisor = WorkspaceSupervisor(self, config)
+
+        if self._status_fn:
+            supervisor.set_status_callback(self._status_fn)
+        if on_event:
+            supervisor.set_event_callback(on_event)
+
+        return await supervisor.run()
+
     async def run(
         self,
         coordinator_llm: Callable | None = None,
         max_cycles: int = 50,
         use_coordinator_agent: bool = True,
+        interactive: bool = False,
     ) -> dict:
-        """Run the workspace autonomously until completion or budget exhaustion.
+        """Discussion-driven workspace execution.
 
-        1. Coordinator decomposes goal into tasks (if enabled)
-        2. Loop: find ready tasks → activate workers → collect output → repeat
-        3. Check completion after each task
-        4. Persist state after each cycle
+        The flow is:
+        1. Kickoff discussion (if no tasks exist)
+        2. Loop: check discussions → find ready tasks → execute → verify → repeat
+        3. Open discussions pause execution until resolved
+        4. Completion check after each cycle
 
-        When *use_coordinator_agent* is True (default), the coordinator runs
-        as a Claude Code instance with MCP comms tools — same infrastructure
-        as workers. Falls back to *coordinator_llm* (raw API callable) if set.
+        When *interactive* is True, discussions block and wait for
+        human_input_fn. When False, discussions are posted to the board
+        and execution continues with non-dependent work.
 
         Returns a dict with completion result and summary.
         """
-        # Decompose goal if coordinator is enabled and backlog is empty
+        # Phase 1: Decompose (with or without kickoff discussion)
         if (
             self._config.coordinator.enabled
             and self._config.coordinator.auto_decompose
             and not self._backlog.get_all_tasks()
         ):
+            # Open kickoff discussion if interactive
+            if interactive and self._human_input_fn:
+                self._status("Opening kickoff discussion...", "Discussing")
+                await self._kickoff_discussion()
+
+            # Create tasks (via coordinator agent or manual)
+            self._status("Coordinator is decomposing the goal into tasks...", "Planning")
             tasks = await self._run_coordinator_decomposition(
                 coordinator_llm, use_coordinator_agent,
             )
             if tasks:
                 self._completion.set_initial_task_count(len(tasks))
+                # Write initial artifacts
+                if self._artifacts:
+                    self._artifacts.write_project(
+                        goal=self._config.goal,
+                        description=self._config.description,
+                        criteria=self._config.acceptance_criteria,
+                    )
+                    self._artifacts.write_plan(
+                        plan_summary=f"{len(tasks)} tasks created",
+                        tasks=[t.model_dump(mode="json") for t in tasks],
+                    )
 
-        # Main loop
+        # Phase 2: Main execution loop
         for cycle in range(max_cycles):
             if self._state.status != WorkspaceStatus.ACTIVE:
                 break
+
+            # Check for open discussions — they may block in interactive mode
+            if interactive and self._discussions.has_open_discussions():
+                await self._handle_open_discussions()
 
             # Check completion
             result = self._completion.check()
@@ -253,25 +352,34 @@ class WorkspaceRuntime:
                 self.complete()
                 return {"complete": True, "reason": result.reason, "cycles": cycle}
 
-            # Find ready tasks (open, dependencies met)
+            # Find ready tasks (OPEN status, dependencies met)
             ready = self._backlog.get_ready_tasks()
             if not ready:
-                # Nothing to do — check if we're stuck or just waiting
-                in_progress = [
+                # Check for PROPOSED tasks needing spec
+                proposed = [
                     t for t in self._backlog.get_all_tasks()
-                    if t.status in (BacklogTaskStatus.CLAIMED, BacklogTaskStatus.IN_PROGRESS,
-                                     BacklogTaskStatus.IN_REVIEW)
+                    if t.status == BacklogTaskStatus.PROPOSED
                 ]
-                if not in_progress:
-                    # No ready tasks, nothing in progress — all done or all blocked
+                if proposed and interactive:
+                    await self._spec_discussion(proposed[0])
+                    continue
+
+                # Check if we're stuck
+                active = [
+                    t for t in self._backlog.get_all_tasks()
+                    if t.status in (
+                        BacklogTaskStatus.CLAIMED, BacklogTaskStatus.IN_PROGRESS,
+                        BacklogTaskStatus.COMPLETED, BacklogTaskStatus.IN_REVIEW,
+                        BacklogTaskStatus.SPECIFYING,
+                    )
+                ]
+                if not active:
                     blocked = self._backlog.get_blocked_tasks()
                     if blocked:
-                        logger.warning("All remaining tasks are blocked")
                         self._board.add_system_alert(
-                            f"{len(blocked)} task(s) blocked with no way to unblock."
+                            f"{len(blocked)} task(s) blocked."
                         )
                     break
-                # Tasks in progress — wait for them (in a real runtime this would be async)
                 break
 
             # Execute ready tasks
@@ -279,52 +387,21 @@ class WorkspaceRuntime:
                 if self._state.status != WorkspaceStatus.ACTIVE:
                     break
 
-                # Find best agent for this task
                 agent_id = self._pick_agent(task)
                 if agent_id is None:
-                    continue  # No agent available, skip
+                    continue
 
-                # Claim and execute
-                try:
-                    self.claim_task(task.task_id, agent_id)
-                    self._backlog.start_task(task.task_id)
+                self._status(f"Executing: {task.title} (agent: {agent_id})", "Executing")
+                await self._execute_task_with_review(task, agent_id, interactive)
 
-                    output = await self._execute_fn(
-                        agent_id, task, self._workspace_dir,
-                    )
+            # Update artifacts
+            if self._artifacts:
+                self._artifacts.update_state(
+                    tasks=[t.model_dump(mode="json") for t in self._backlog.get_all_tasks()],
+                    team_status=[s.model_dump(mode="json") for s in self._board.get_state().team_status],
+                )
 
-                    # Route outbox messages
-                    self._route_outbox()
-
-                    # Complete the task
-                    self.complete_task(task.task_id, output)
-
-                    # Update context summary
-                    self._summary_mgr.update_agent_summary(
-                        agent_id, output or {}, task.title,
-                    )
-
-                    # Track output size for diminishing returns
-                    output_chars = len(json.dumps(output)) if output else 0
-                    self._completion.record_task_output(output_chars)
-
-                    # Fire hooks
-                    self._hooks.fire(WorkspaceEvent.TASK_COMPLETED, {
-                        "task_id": task.task_id,
-                        "title": task.title,
-                        "agent_id": agent_id,
-                    })
-
-                except Exception as exc:
-                    logger.error("Task %s failed: %s", task.task_id, exc, exc_info=True)
-                    self._backlog.cancel_task(task.task_id, str(exc))
-                    self._hooks.fire(WorkspaceEvent.TASK_FAILED, {
-                        "task_id": task.task_id,
-                        "title": task.title,
-                        "error": str(exc),
-                    })
-
-            # Persist after each cycle
+            # Persist
             self._persist()
 
         return {
@@ -332,6 +409,252 @@ class WorkspaceRuntime:
             "reason": "max_cycles" if self._state.status == WorkspaceStatus.ACTIVE else self._state.status,
             "cycles": cycle + 1 if 'cycle' in dir() else 0,
         }
+
+    # ------------------------------------------------------------------
+    # Discussion-driven helpers
+    # ------------------------------------------------------------------
+
+    async def _kickoff_discussion(self) -> None:
+        """Open a kickoff discussion with the human."""
+        from agentos.workspace.facilitator_prompts import build_kickoff_prompt
+
+        prompt = build_kickoff_prompt(self._config)
+        # For now, use the prompt as the opening message directly
+        # In production, the coordinator LLM would generate the message
+        opening = (
+            f"I've read your goal: \"{self._config.goal.strip()[:150]}\"\n\n"
+            f"Before I plan, a few questions:\n"
+            f"1. What's most important — speed, depth, or cost efficiency?\n"
+            f"2. Any specific focus areas or constraints?\n"
+            f"3. Who is the intended audience for the output?\n\n"
+            f"I'm initially thinking we could use the team to tackle this in parallel. "
+            f"What do you think?"
+        )
+
+        thread_id = self._discussions.open(
+            discussion_type="kickoff",
+            title="Project kickoff",
+            opening_message=opening,
+            options=["Prioritize depth", "Prioritize speed", "Balanced approach"],
+        )
+
+        # Get human response if interactive
+        if self._human_input_fn:
+            response = self._human_input_fn(
+                opening + "\n\nYour response: ",
+                ["Prioritize depth", "Prioritize speed", "Balanced approach"],
+            )
+            if response:
+                self._discussions.add_message(
+                    thread_id, "human", response, sender_type="human",
+                )
+                self._discussions.resolve(
+                    thread_id, f"Human directed: {response}",
+                )
+
+    async def _spec_discussion(self, task: BacklogTask) -> None:
+        """Open a spec discussion for a proposed task."""
+        opening = (
+            f"I'd like to discuss the approach for: **{task.title}**\n\n"
+            f"{task.description}\n\n"
+            f"Suggested for: {task.suggested_for or 'unassigned'}\n\n"
+            f"Does this scope look right? Any adjustments?"
+        )
+
+        thread_id = self._discussions.open(
+            discussion_type="task_spec",
+            title=f"Spec: {task.title}",
+            opening_message=opening,
+            related_task_id=task.task_id,
+        )
+        self._backlog.start_specifying(task.task_id, thread_id)
+
+        if self._human_input_fn:
+            response = self._human_input_fn(opening + "\n\nYour response: ", None)
+            if response:
+                self._discussions.add_message(
+                    thread_id, "human", response, sender_type="human",
+                )
+                self._discussions.resolve(thread_id, f"Spec agreed: {response}")
+                self._backlog.finalize_spec(
+                    task.task_id,
+                    spec=task.description,
+                    approach=response,
+                    expected_output=task.spec_expected_output or "",
+                )
+
+    async def _execute_task_with_review(
+        self, task: BacklogTask, agent_id: str, interactive: bool,
+    ) -> None:
+        """Execute a task with optional review discussion."""
+        try:
+            self.claim_task(task.task_id, agent_id)
+            self._backlog.start_task(task.task_id)
+
+            # Write task spec as artifact
+            if self._artifacts and task.spec:
+                self._artifacts.write_task_spec(
+                    task.task_id, task.title,
+                    task.spec, task.spec_approach or "", task.spec_expected_output or "",
+                )
+
+            # Build curated context and execute
+            output = await self._execute_fn(agent_id, task, self._workspace_dir)
+
+            self._route_outbox()
+
+            # Mark as completed (awaiting review)
+            self._backlog.mark_completed(task.task_id, output)
+
+            # Verify output
+            self._status(f"Verifying output for: {task.title}", "Verifying")
+            verification = self._verifier.verify(task, output)
+
+            if verification.recommendation == "auto_accept" and not interactive:
+                # Clean pass, non-interactive — skip review, go straight to done
+                self._backlog.start_review(task.task_id, "auto-review")
+                self._backlog.accept_review(task.task_id, "auto_accepted")
+                logger.info("Task %s auto-accepted", task.title)
+            elif interactive and self._human_input_fn:
+                # Open review discussion with the human
+                await self._review_discussion(task, output, verification)
+            else:
+                # Non-interactive, needs review — accept with note
+                self._backlog.start_review(task.task_id, "auto-review")
+                self._backlog.accept_review(task.task_id, "accepted")
+
+            # Write output artifact
+            if self._artifacts:
+                self._artifacts.write_task_output(
+                    task.task_id, task.title,
+                    (output or {}).get("summary", ""),
+                    [(f.get("finding", str(f)) if isinstance(f, dict) else str(f))
+                     for f in (output or {}).get("findings", [])],
+                )
+
+            # Update summaries
+            self._summary_mgr.update_agent_summary(agent_id, output or {}, task.title)
+            output_chars = len(json.dumps(output)) if output else 0
+            self._completion.record_task_output(output_chars)
+
+            self._hooks.fire(WorkspaceEvent.TASK_COMPLETED, {
+                "task_id": task.task_id, "title": task.title, "agent_id": agent_id,
+            })
+
+        except Exception as exc:
+            logger.error("Task %s failed: %s", task.task_id, exc, exc_info=True)
+            try:
+                self._backlog.cancel_task(task.task_id, str(exc))
+            except ValueError:
+                pass
+            self._hooks.fire(WorkspaceEvent.TASK_FAILED, {
+                "task_id": task.task_id, "title": task.title, "error": str(exc),
+            })
+
+    async def _review_discussion(
+        self, task: BacklogTask, output: dict | None,
+        verification,
+    ) -> None:
+        """Open a review discussion after task completion."""
+        review_ctx = self._verifier.prepare_review_context(task, output, verification)
+        summary = review_ctx["output_summary"]
+        issues = review_ctx["verification_issues"]
+
+        # Build rich review with file previews
+        opening = f"**{task.title}** is complete.\n\n"
+        opening += f"Summary: {summary}\n"
+
+        # Show produced files
+        files = (output or {}).get("files_produced", [])
+        if files:
+            opening += f"\nFiles produced:\n"
+            for f in files[:5]:
+                opening += f"  📄 {f}\n"
+                # Preview small files
+                if self._workspace_dir:
+                    fpath = self._workspace_dir / f
+                    if fpath.exists() and fpath.stat().st_size < 3000:
+                        content = fpath.read_text()
+                        preview = content[:300].replace('\n', '\n    ')
+                        opening += f"    {preview}{'...' if len(content) > 300 else ''}\n\n"
+
+        # Show findings
+        findings = (output or {}).get("findings", [])
+        if findings:
+            opening += f"\nKey findings:\n"
+            for f in findings[:5]:
+                text = f.get("finding", str(f)) if isinstance(f, dict) else str(f)
+                opening += f"  • {text[:100]}\n"
+
+        # Show tool activity summary
+        tool_calls = (output or {}).get("tool_calls", [])
+        if tool_calls:
+            opening += f"\nAgent activity ({len(tool_calls)} steps):\n"
+            for tc in tool_calls[-5:]:
+                opening += f"  → {tc}\n"
+
+        if issues:
+            opening += f"\n⚠ Issues found:\n" + "\n".join(f"  - {i}" for i in issues)
+
+        opening += (
+            f"\n\nShould we:\n"
+            f"a) Accept and move on\n"
+            f"b) Ask for revision\n"
+            f"c) Go deeper on this topic"
+        )
+
+        thread_id = self._discussions.open(
+            discussion_type="review",
+            title=f"Review: {task.title}",
+            opening_message=opening,
+            related_task_id=task.task_id,
+            options=["Accept", "Revise", "Go deeper"],
+        )
+        self._backlog.start_review(task.task_id, thread_id)
+
+        if self._human_input_fn:
+            response = self._human_input_fn(opening + "\n\nYour response: ", ["Accept", "Revise", "Go deeper"])
+            if response:
+                self._discussions.add_message(thread_id, "human", response, sender_type="human")
+
+                if "accept" in response.lower() or response.strip().lower() == "a":
+                    self._discussions.resolve(thread_id, "Accepted")
+                    self._backlog.accept_review(task.task_id, "accepted")
+                elif "revise" in response.lower() or response.strip().lower() == "b":
+                    self._discussions.resolve(thread_id, f"Revision requested: {response}")
+                    self._backlog.request_revision(task.task_id, response)
+                else:
+                    self._discussions.resolve(thread_id, f"Human feedback: {response}")
+                    self._backlog.accept_review(task.task_id, "accepted_with_feedback")
+
+    async def _handle_open_discussions(self) -> None:
+        """Handle open discussions by prompting for human input."""
+        if not self._human_input_fn:
+            return
+
+        for thread in self._discussions.get_open():
+            last_msg = thread.messages[-1] if thread.messages else None
+            if last_msg and last_msg.get("sender_type") == "human":
+                continue  # Waiting for coordinator, not human
+
+            prompt = f"[Discussion: {thread.title}]\n"
+            prompt += thread.opening_message
+            if len(thread.messages) > 1:
+                prompt += "\n\nConversation so far:\n"
+                for msg in thread.messages[1:]:
+                    prompt += f"  {msg['sender_id']}: {msg['content']}\n"
+            prompt += "\nYour response: "
+
+            response = self._human_input_fn(prompt, thread.options)
+            if response:
+                self._discussions.add_message(
+                    thread.thread_id, "human", response, sender_type="human",
+                )
+                # Auto-resolve simple discussions
+                if thread.discussion_type in ("check_in",):
+                    self._discussions.resolve(
+                        thread.thread_id, f"Human response: {response}",
+                    )
 
     def _pick_agent(self, task: BacklogTask) -> str | None:
         """Pick the best agent for a task based on suggestion and availability."""
@@ -417,6 +740,8 @@ class WorkspaceRuntime:
                 bus=self._bus,
                 backlog=self._backlog,
                 workflow_id=self._workflow_id,
+                project_dir=self._project_dir,
+                status_fn=self._status_fn,
             )
             if tasks:
                 logger.info("Coordinator (Claude Code) created %d tasks", len(tasks))
@@ -451,7 +776,7 @@ class WorkspaceRuntime:
         task: BacklogTask,
         workspace: Path | None,
     ) -> dict:
-        """Default agent execution: launch Claude Code with MCP comms."""
+        """Default agent execution: launch Claude Code with streaming progress."""
         if workspace is None:
             return {"summary": "No workspace directory configured.", "status": "failed"}
 
@@ -462,7 +787,18 @@ class WorkspaceRuntime:
         write_comms_state(workspace, self._board, pending, agent_id, self._workflow_id)
         write_board_state(workspace, self._board)
 
-        # Build prompt
+        # Snapshot workspace files before execution
+        files_before = set()
+        for f in workspace.rglob("*"):
+            if f.is_file() and ".agentos" not in str(f) and "_coordinator" not in str(f):
+                files_before.add(str(f))
+
+        # Build prompt with curated context
+        context_section = ""
+        if self._curator:
+            ctx = self._curator.curate(task)
+            context_section = self._curator.render_prompt_section(ctx)
+
         comms_instructions = (
             "\n\n## Team Communication\n"
             "You have MCP tools: read_board, post_to_board, check_messages, send_message.\n"
@@ -471,19 +807,24 @@ class WorkspaceRuntime:
         prompt = (
             f"You are {agent_id}. Your task:\n\n"
             f"## {task.title}\n{task.description}\n"
+            f"\n{context_section}\n"
             f"{comms_instructions}"
         )
 
-        # Build command
+        # Build command — use stream-json for live progress
         cmd = [
             "claude", "--print",
-            "--output-format", "json",
-            "--max-turns", "8",
-            "--allowedTools", "Read,Write,Edit,Glob,Grep",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--max-turns", "15",
+            "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash",
             "--disallowedTools", "Agent,TodoWrite,ToolSearch",
         ]
 
-        # Add MCP comms server
+        # Give agent access to the actual project codebase
+        if self._project_dir and self._project_dir.exists():
+            cmd.extend(["--add-dir", str(self._project_dir)])
+
         mcp_config = json.dumps({
             "mcpServers": {
                 "agentos-comms": {
@@ -497,35 +838,164 @@ class WorkspaceRuntime:
 
         logger.info("Launching %s for task: %s", agent_id, task.title)
 
+        # Stream execution with live progress
+        import threading
+
+        result_json = "{}"
+        tool_calls: list[str] = []
+
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 cmd, cwd=str(workspace),
-                capture_output=True, text=True, timeout=180,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True,
             )
-            if result.returncode != 0 and result.stderr:
-                logger.warning("Agent stderr: %s", result.stderr[:300])
+
+            def _read_stream():
+                nonlocal result_json
+                for line in proc.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if event.get("type") == "result":
+                        result_json = line
+                    elif event.get("type") == "assistant":
+                        for block in event.get("message", {}).get("content", []):
+                            if block.get("type") == "tool_use":
+                                name = block.get("name", "")
+                                inp = block.get("input", {})
+                                # Show what the agent is doing
+                                desc = self._describe_tool_call(name, inp)
+                                if desc:
+                                    tool_calls.append(desc)
+                                    self._status(desc, agent_id)
+
+            def _drain_stderr():
+                for _ in proc.stderr:
+                    pass
+
+            t_out = threading.Thread(target=_read_stream, daemon=True)
+            t_err = threading.Thread(target=_drain_stderr, daemon=True)
+            t_out.start()
+            t_err.start()
+
+            proc.wait(timeout=600)
+            t_out.join(timeout=2)
+            t_err.join(timeout=2)
+
         except subprocess.TimeoutExpired:
-            return {"summary": "Agent timed out after 180s.", "status": "failed"}
+            proc.kill()
+            proc.wait()
+            return {"summary": "Agent timed out after 600s.", "status": "failed"}
         except FileNotFoundError:
             return {"summary": "claude CLI not found.", "status": "failed"}
+
+        # Detect new/modified files
+        files_after = set()
+        for f in workspace.rglob("*"):
+            if f.is_file() and ".agentos" not in str(f) and "_coordinator" not in str(f):
+                files_after.add(str(f))
+        new_files = [
+            str(Path(f).relative_to(workspace))
+            for f in (files_after - files_before)
+            if "backlog" not in f
+        ]
 
         # Parse manifest if produced
         manifest_path = workspace / "manifest.json"
         if manifest_path.exists():
             try:
                 manifest = json.loads(manifest_path.read_text())
-                manifest_path.unlink()  # Clean for next agent
+                manifest_path.unlink()
                 return {
                     "summary": manifest.get("summary", "Task completed."),
                     "status": "succeeded",
                     "findings": manifest.get("findings", []),
                     "open_questions": manifest.get("open_questions", []),
-                    "files_produced": manifest.get("files_produced", []),
+                    "files_produced": manifest.get("files_produced", new_files),
+                    "tool_calls": tool_calls,
                 }
             except json.JSONDecodeError:
                 pass
 
-        return {"summary": "Task completed (no manifest).", "status": "succeeded"}
+        # No manifest — build output from what we observed
+        summary = "Task completed."
+        if new_files:
+            summary += f" Produced: {', '.join(new_files[:5])}"
+        if tool_calls:
+            summary += f" ({len(tool_calls)} tool calls)"
+
+        return {
+            "summary": summary,
+            "status": "succeeded",
+            "files_produced": new_files,
+            "tool_calls": tool_calls,
+        }
+
+    @staticmethod
+    def _describe_tool_call(name: str, inp: dict) -> str:
+        """Human-readable description of a tool call.
+
+        Inspired by Claude Code's getActivityDescription() pattern.
+        Shows enough context for the human to understand what's happening.
+        """
+        def _short_path(p: str) -> str:
+            """Shorten long paths to just filename or last 2 segments."""
+            parts = p.replace("\\", "/").split("/")
+            if len(parts) <= 2:
+                return p
+            return "/".join(parts[-2:])
+
+        if name == "Read":
+            path = inp.get("file_path", inp.get("path", "?"))
+            return f"📖 Reading {_short_path(path)}"
+        if name == "Write":
+            path = inp.get("file_path", inp.get("path", "?"))
+            return f"✏️  Writing {_short_path(path)}"
+        if name == "Edit":
+            path = inp.get("file_path", "?")
+            return f"🔧 Editing {_short_path(path)}"
+        if name == "Glob":
+            pattern = inp.get("pattern", "?")
+            return f"🔍 Finding files: {pattern}"
+        if name == "Grep":
+            pattern = inp.get("pattern", "?")
+            path = inp.get("path", "")
+            where = f" in {_short_path(path)}" if path else ""
+            return f"🔎 Searching for '{pattern[:40]}'{where}"
+        if name == "Bash":
+            cmd = inp.get("command", "?")
+            # Truncate long commands but show enough to be useful
+            if len(cmd) > 80:
+                cmd = cmd[:77] + "..."
+            return f"⚡ {cmd}"
+        if name == "read_board":
+            return "📋 Reading workspace board"
+        if name == "post_to_board":
+            content = inp.get("content", "")
+            return f"📋 Posting to board: {content[:50]}"
+        if name == "check_messages":
+            return "💬 Checking messages"
+        if name == "send_message":
+            to = inp.get("to", "?")
+            return f"💬 Messaging {to}"
+        if name == "NotebookEdit":
+            return f"📓 Editing notebook"
+        if name:
+            # Generic fallback with input hint
+            hint = ""
+            for key in ("file_path", "path", "pattern", "command", "query"):
+                if key in inp:
+                    val = str(inp[key])[:40]
+                    hint = f": {val}"
+                    break
+            return f"🔧 {name}{hint}"
+        return ""
 
     # ------------------------------------------------------------------
     # Task management

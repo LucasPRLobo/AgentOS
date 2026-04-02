@@ -1,12 +1,15 @@
-"""Comms state file I/O — bridge between the orchestrator and the MCP server.
+"""Comms state file I/O — shared state for concurrent workspace access.
 
-The orchestrator writes comms state to ``.agentos/comms_state.json`` before
-launching an agent.  The MCP server (running as a child process of Claude Code)
-reads this file to serve board state and pending messages.
+Two modes:
 
-When the agent sends messages or posts to the board via MCP tools, the MCP
-server writes to ``.agentos/outbox/`` (same convention as Phase 1).  The
-orchestrator reads the outbox after the agent completes.
+**Legacy (sequential):** orchestrator writes ``comms_state.json`` before
+launching an agent, MCP server reads it. Works for one-at-a-time execution.
+
+**Concurrent (supervisor):** each agent has its own directory under
+``.agentos/agents/{id}/`` with inbox.json, outbox/, status.json.
+The human has ``.agentos/human/`` with inbox.json and commands.json.
+The board lives at ``.agentos/board.json`` (written by supervisor every tick).
+All participants read live files, not stale snapshots.
 """
 
 from __future__ import annotations
@@ -126,3 +129,191 @@ def refresh_comms_state(
 
     state_path = workspace / ".agentos" / "comms_state.json"
     state_path.write_text(json.dumps(state, indent=2))
+
+
+# ======================================================================
+# Concurrent file I/O (per-agent directories)
+# ======================================================================
+
+def _agentos_dir(workspace: Path) -> Path:
+    d = workspace / ".agentos"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def ensure_agent_dir(workspace: Path, agent_id: str) -> Path:
+    """Create and return .agentos/agents/{agent_id}/."""
+    d = _agentos_dir(workspace) / "agents" / agent_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "outbox").mkdir(exist_ok=True)
+    return d
+
+
+def ensure_human_dir(workspace: Path) -> Path:
+    """Create and return .agentos/human/."""
+    d = _agentos_dir(workspace) / "human"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ── Agent I/O ────────────────────────────────────────────────────────
+
+def write_agent_inbox(workspace: Path, agent_id: str, messages: list[dict]) -> None:
+    """Write pending messages to an agent's inbox.json."""
+    agent_dir = ensure_agent_dir(workspace, agent_id)
+    inbox_path = agent_dir / "inbox.json"
+    # Merge with existing (don't overwrite unread messages)
+    existing = []
+    if inbox_path.exists():
+        try:
+            existing = json.loads(inbox_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    existing.extend(messages)
+    inbox_path.write_text(json.dumps(existing, indent=2))
+
+
+def read_agent_inbox(workspace: Path, agent_id: str) -> list[dict]:
+    """Read and clear an agent's inbox.json."""
+    agent_dir = _agentos_dir(workspace) / "agents" / agent_id
+    inbox_path = agent_dir / "inbox.json"
+    if not inbox_path.exists():
+        return []
+    try:
+        messages = json.loads(inbox_path.read_text())
+        inbox_path.write_text("[]")
+        return messages
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def read_agent_outbox(workspace: Path, agent_id: str) -> list[dict]:
+    """Read and clear all messages from an agent's outbox/."""
+    agent_dir = _agentos_dir(workspace) / "agents" / agent_id
+    outbox_dir = agent_dir / "outbox"
+    if not outbox_dir.exists():
+        return []
+    messages = []
+    for f in sorted(outbox_dir.glob("*.json")):
+        try:
+            messages.append(json.loads(f.read_text()))
+            f.unlink()
+        except (json.JSONDecodeError, OSError):
+            pass
+    return messages
+
+
+def write_agent_status(workspace: Path, agent_id: str, status: dict) -> None:
+    """Write agent's self-reported status (heartbeat + activity)."""
+    agent_dir = ensure_agent_dir(workspace, agent_id)
+    (agent_dir / "status.json").write_text(json.dumps(status, indent=2))
+
+
+def read_agent_status(workspace: Path, agent_id: str) -> dict | None:
+    """Read agent's last reported status."""
+    status_path = _agentos_dir(workspace) / "agents" / agent_id / "status.json"
+    if not status_path.exists():
+        return None
+    try:
+        return json.loads(status_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def read_all_agent_outboxes(workspace: Path) -> dict[str, list[dict]]:
+    """Read and clear outboxes for ALL agents. Returns {agent_id: [messages]}."""
+    agents_dir = _agentos_dir(workspace) / "agents"
+    if not agents_dir.exists():
+        return {}
+    result = {}
+    for agent_dir in agents_dir.iterdir():
+        if agent_dir.is_dir():
+            msgs = read_agent_outbox(workspace, agent_dir.name)
+            if msgs:
+                result[agent_dir.name] = msgs
+    return result
+
+
+# ── Human I/O ────────────────────────────────────────────────────────
+
+def write_human_inbox(workspace: Path, messages: list[dict]) -> None:
+    """Write messages for the human to .agentos/human/inbox.json."""
+    human_dir = ensure_human_dir(workspace)
+    inbox_path = human_dir / "inbox.json"
+    existing = []
+    if inbox_path.exists():
+        try:
+            existing = json.loads(inbox_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    existing.extend(messages)
+    inbox_path.write_text(json.dumps(existing, indent=2))
+
+
+def read_human_inbox(workspace: Path) -> list[dict]:
+    """Read and clear .agentos/human/inbox.json."""
+    inbox_path = _agentos_dir(workspace) / "human" / "inbox.json"
+    if not inbox_path.exists():
+        return []
+    try:
+        messages = json.loads(inbox_path.read_text())
+        inbox_path.write_text("[]")
+        return messages
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def write_human_command(workspace: Path, command: dict) -> None:
+    """Human writes a command (from CLI or dashboard)."""
+    human_dir = ensure_human_dir(workspace)
+    cmd_path = human_dir / "commands.json"
+    existing = []
+    if cmd_path.exists():
+        try:
+            existing = json.loads(cmd_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    existing.append(command)
+    cmd_path.write_text(json.dumps(existing, indent=2))
+
+
+def read_human_commands(workspace: Path) -> list[dict]:
+    """Read and clear .agentos/human/commands.json."""
+    cmd_path = _agentos_dir(workspace) / "human" / "commands.json"
+    if not cmd_path.exists():
+        return []
+    try:
+        commands = json.loads(cmd_path.read_text())
+        cmd_path.write_text("[]")
+        return commands
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+# ── Board file ───────────────────────────────────────────────────────
+
+def write_board_file(workspace: Path, board_data: dict) -> None:
+    """Write live board state to .agentos/board.json."""
+    board_path = _agentos_dir(workspace) / "board.json"
+    board_path.write_text(json.dumps(board_data, indent=2))
+
+
+def read_board_file(workspace: Path) -> dict | None:
+    """Read live board state from .agentos/board.json."""
+    board_path = _agentos_dir(workspace) / "board.json"
+    if not board_path.exists():
+        return None
+    try:
+        return json.loads(board_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+# ── Events stream ────────────────────────────────────────────────────
+
+def append_event(workspace: Path, event: dict) -> None:
+    """Append an event to .agentos/events/events.jsonl."""
+    events_dir = _agentos_dir(workspace) / "events"
+    events_dir.mkdir(exist_ok=True)
+    with open(events_dir / "events.jsonl", "a") as f:
+        f.write(json.dumps(event) + "\n")

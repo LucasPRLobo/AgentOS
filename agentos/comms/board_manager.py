@@ -9,9 +9,11 @@ See docs/COMMS_RESEARCH_AND_PLAN.md §5 for design rationale.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 
 from agentos.comms.schemas import (
     AgentStatus,
@@ -369,6 +371,33 @@ class BoardManager:
         for pid in to_archive:
             self.archive(pid)
         return len(to_archive)
+
+    # ------------------------------------------------------------------
+    # File persistence (for concurrent access)
+    # ------------------------------------------------------------------
+
+    def save_to_file(self, path: Path) -> None:
+        """Serialize current board state to JSON file with locking."""
+        from agentos.workspace.filelock import file_lock
+
+        with self._lock:
+            data = self._state.model_dump(mode="json")
+
+        lock_path = path.parent / (path.name + ".lock")
+        with file_lock(lock_path):
+            path.write_text(json.dumps(data, indent=2))
+
+    def load_from_file(self, path: Path) -> None:
+        """Load board state from a JSON file."""
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text())
+            state = BoardState(**data)
+            with self._lock:
+                self._state = state
+        except (json.JSONDecodeError, Exception) as exc:
+            logger.warning("Failed to load board from %s: %s", path, exc)
 
     # ------------------------------------------------------------------
     # Internal helpers

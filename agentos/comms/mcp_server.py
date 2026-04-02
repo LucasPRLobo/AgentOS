@@ -71,9 +71,31 @@ def _get_workspace() -> Path:
 
 
 def _read_state() -> dict:
-    """Read the comms state file."""
-    from agentos.comms.comms_state import read_comms_state
-    return read_comms_state(_get_workspace())
+    """Read comms state — prefers live board.json, falls back to legacy snapshot."""
+    ws = _get_workspace()
+    from agentos.comms.comms_state import read_board_file, read_comms_state
+
+    # Try live board file first (concurrent mode)
+    board_data = read_board_file(ws)
+    if board_data is not None:
+        # Read agent-specific inbox
+        agent_id = os.environ.get("AGENTOS_AGENT_ID", "")
+        inbox = []
+        if agent_id:
+            from agentos.comms.comms_state import read_agent_inbox
+            inbox = read_agent_inbox(ws, agent_id)
+        # Build compact board from full state
+        compact = board_data.get("_compact", "[WORKSPACE BOARD]\n[END BOARD]")
+        return {
+            "agent_id": agent_id,
+            "workflow_id": board_data.get("workflow_id", ""),
+            "board_compact": compact,
+            "board_full": board_data,
+            "inbox": inbox,
+        }
+
+    # Fallback: legacy snapshot
+    return read_comms_state(ws)
 
 
 def _write_outbox(message: dict) -> str:
@@ -309,6 +331,37 @@ def escalate(issue: str, context: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Progress reporting
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def report_progress(summary: str, activity: str = "") -> str:
+    """Report what you're currently working on.
+
+    Call this periodically to let the team and human know what you're doing.
+    The supervisor and dashboard will display your progress.
+
+    Args:
+        summary: Brief description of current status (e.g., "Analyzing competitor dashboards")
+        activity: Specific current activity (e.g., "Reading Linear's kanban implementation")
+    """
+    state = _read_state()
+    agent_id = state.get("agent_id", "")
+    if not agent_id:
+        agent_id = os.environ.get("AGENTOS_AGENT_ID", "unknown")
+
+    from agentos.comms.comms_state import write_agent_status
+    write_agent_status(_get_workspace(), agent_id, {
+        "agent_id": agent_id,
+        "summary": summary,
+        "activity": activity,
+        "timestamp": datetime.now(UTC).isoformat(),
+    })
+
+    return f"Progress reported: {summary}"
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -320,13 +373,22 @@ def main():
         default=None,
         help="Workspace directory path (defaults to CWD or AGENTOS_WORKSPACE env)",
     )
+    parser.add_argument(
+        "--agent-id",
+        type=str,
+        default=None,
+        help="Agent ID for this MCP server instance",
+    )
     args = parser.parse_args()
 
     global _workspace
     if args.workspace:
         _workspace = Path(args.workspace)
+    if args.agent_id:
+        os.environ["AGENTOS_AGENT_ID"] = args.agent_id
 
-    logger.info("AgentOS Comms MCP Server starting (workspace: %s)", _get_workspace())
+    logger.info("AgentOS Comms MCP Server starting (workspace: %s, agent: %s)",
+                _get_workspace(), args.agent_id or "unknown")
     mcp.run()
 
 

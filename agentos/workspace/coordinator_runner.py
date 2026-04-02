@@ -33,6 +33,8 @@ def _run_coordinator_claude(
     bus: MessageBus,
     workflow_id: str,
     max_turns: int = 15,
+    project_dir: Path | None = None,
+    status_fn=None,
 ) -> str:
     """Launch Claude Code as the coordinator and return raw output."""
     # Write comms state so coordinator can read the board
@@ -60,11 +62,16 @@ def _run_coordinator_claude(
 
     cmd = [
         "claude", "--print",
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--verbose",
         "--max-turns", str(max_turns),
-        "--allowedTools", "Read,Write,Edit,Glob,Grep",
+        "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash",
         "--disallowedTools", "Agent,TodoWrite,ToolSearch",
     ]
+
+    # Give coordinator access to the actual project codebase
+    if project_dir and project_dir.exists():
+        cmd.extend(["--add-dir", str(project_dir)])
 
     # Add MCP comms server
     mcp_config = json.dumps({
@@ -79,20 +86,93 @@ def _run_coordinator_claude(
     cmd.extend(["--mcp-config", mcp_config, "-p", full_prompt])
 
     logger.info("Launching coordinator (Claude Code)")
+
+    # Stream with progress
+    import threading
+
+    result_text = ""
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd, cwd=str(workspace),
-            capture_output=True, text=True, timeout=180,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
-        if result.returncode != 0 and result.stderr:
-            logger.warning("Coordinator stderr: %s", result.stderr[:300])
-        return result.stdout
+
+        def _read():
+            nonlocal result_text
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "result":
+                    result_text = line
+                elif event.get("type") == "assistant" and status_fn:
+                    for block in event.get("message", {}).get("content", []):
+                        if block.get("type") == "tool_use":
+                            name = block.get("name", "")
+                            inp = block.get("input", {})
+                            desc = _describe_coordinator_action(name, inp)
+                            if desc:
+                                status_fn(desc, "Coordinator")
+
+        def _drain():
+            for _ in proc.stderr:
+                pass
+
+        t_out = threading.Thread(target=_read, daemon=True)
+        t_err = threading.Thread(target=_drain, daemon=True)
+        t_out.start()
+        t_err.start()
+        proc.wait(timeout=600)
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
+        return result_text
     except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
         logger.error("Coordinator timed out")
         return ""
-    except FileNotFoundError:
+    except FileNotFoundError:  # noqa: E722
         logger.error("claude CLI not found")
         return ""
+
+
+def _describe_coordinator_action(name: str, inp: dict) -> str:
+    """Human-readable description of a coordinator tool call."""
+    if name == "Read":
+        path = inp.get("file_path", inp.get("path", "?"))
+        parts = path.replace("\\", "/").split("/")
+        short = "/".join(parts[-2:]) if len(parts) > 2 else path
+        return f"📖 Reading {short}"
+    if name == "Write":
+        path = inp.get("file_path", inp.get("path", "?"))
+        parts = path.replace("\\", "/").split("/")
+        short = "/".join(parts[-2:]) if len(parts) > 2 else path
+        return f"✏️  Writing {short}"
+    if name == "Glob":
+        return f"🔍 Finding: {inp.get('pattern', '?')}"
+    if name == "Grep":
+        return f"🔎 Searching: {inp.get('pattern', '?')[:40]}"
+    if name == "Bash":
+        cmd = inp.get("command", "?")
+        return f"⚡ {cmd[:60]}"
+    clean = name.replace("mcp__agentos-comms__", "").replace("mcp__agentos_comms__", "")
+    if clean == "read_board":
+        return "📋 Reading board"
+    if clean == "post_to_board":
+        return f"📋 Posting to board"
+    if clean == "check_messages":
+        return "💬 Checking messages"
+    if clean == "send_message":
+        return f"💬 Messaging {inp.get('to', '?')}"
+    if clean == "report_progress":
+        return f"📊 {inp.get('summary', 'progress')[:50]}"
+    if name:
+        return f"🔧 {name}"
+    return ""
 
 
 def run_decomposition(
@@ -102,6 +182,8 @@ def run_decomposition(
     bus: MessageBus,
     backlog: BacklogManager,
     workflow_id: str,
+    project_dir: Path | None = None,
+    status_fn=None,
 ) -> list[BacklogTask]:
     """Launch coordinator to decompose the goal into tasks.
 
@@ -170,7 +252,8 @@ Rules:
         role="Project coordination", state="running",
     ))
 
-    _run_coordinator_claude(prompt, workspace, board, bus, workflow_id)
+    _run_coordinator_claude(prompt, workspace, board, bus, workflow_id,
+                            project_dir=project_dir, status_fn=status_fn)
 
     board.update_agent_status(AgentStatus(
         agent_id=_COORDINATOR_ID, agent_name="Coordinator",
@@ -273,7 +356,16 @@ def _parse_decomposition(workspace: Path, backlog: BacklogManager) -> list[Backl
     title_to_id: dict[str, str] = {}
     tasks: list[BacklogTask] = []
 
+    _VALID_PRIORITIES = {"low", "normal", "high", "critical"}
+    _VALID_TIERS = {"haiku", "sonnet", "opus", None}
+
     for td in tasks_data:
+        # Sanitize LLM output — models sometimes invent values
+        raw_priority = td.get("priority", "normal")
+        priority = raw_priority if raw_priority in _VALID_PRIORITIES else "normal"
+        raw_tier = td.get("model_tier")
+        model_tier = raw_tier if raw_tier in _VALID_TIERS else None
+
         task = BacklogTask(
             title=td.get("title", "Untitled"),
             description=td.get("description", ""),
@@ -282,8 +374,8 @@ def _parse_decomposition(workspace: Path, backlog: BacklogManager) -> list[Backl
             required_role=td.get("required_role"),
             acceptance_criteria=td.get("acceptance_criteria", []),
             estimated_minutes=td.get("estimated_minutes"),
-            priority=td.get("priority", "normal"),
-            model_tier=td.get("model_tier"),
+            priority=priority,
+            model_tier=model_tier,
         )
         title_to_id[task.title] = task.task_id
         tasks.append(task)

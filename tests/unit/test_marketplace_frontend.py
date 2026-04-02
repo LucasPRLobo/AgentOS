@@ -25,10 +25,10 @@ class TestMarketplaceFrontendExists:
         assert "template-grid" in content
         assert "deploy-btn" in content or "Deploy" in content
 
-    def test_app_has_marketplace_route(self):
+    def test_app_has_workspace_routes(self):
         content = (FRONTEND_SRC / "App.tsx").read_text()
-        assert "/marketplace" in content
-        assert "MarketplacePage" in content
+        assert "/workspace" in content
+        assert "WorkspacePage" in content
 
     def test_marketplace_has_search(self):
         content = (FRONTEND_SRC / "pages" / "MarketplacePage.tsx").read_text()

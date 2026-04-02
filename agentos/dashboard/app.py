@@ -387,6 +387,28 @@ def create_app(db_path: str) -> FastAPI:
         return {"gate_id": gate_id, "resolution": resolution_str}
 
     # ------------------------------------------------------------------
+    # Workspace API (V2 — board, backlog, messaging, team)
+    # ------------------------------------------------------------------
+
+    try:
+        from agentos.dashboard.workspace_api import (
+            create_workspace_router,
+            create_workspace_websocket_handler,
+        )
+        workspace_router = create_workspace_router(event_log)
+        app.include_router(workspace_router)
+
+        ws_handler = create_workspace_websocket_handler(event_log)
+
+        @app.websocket("/ws/workspace/{workspace_id}")
+        async def workspace_websocket(websocket: WebSocket, workspace_id: str) -> None:
+            await ws_handler(websocket, workspace_id)
+
+        logger.info("Workspace API routes registered.")
+    except ImportError:
+        logger.debug("Workspace API not available (missing dependencies).")
+
+    # ------------------------------------------------------------------
     # NL Workflow Generation
     # ------------------------------------------------------------------
 

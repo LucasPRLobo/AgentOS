@@ -211,6 +211,41 @@ class WorkspaceState(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Supervisor (concurrent workspace execution)
+# ---------------------------------------------------------------------------
+
+class SupervisorConfig(BaseModel):
+    """Configuration for the workspace supervisor."""
+    poll_interval: float = 2.0          # seconds between supervisor ticks
+    max_concurrent: int = 4             # max simultaneous agent processes
+    agent_timeout: float = 600.0        # seconds before killing an agent
+    heartbeat_stale: float = 60.0       # seconds without heartbeat = stalled
+    coordinator_cooldown: float = 15.0  # min seconds between coordinator calls
+    auto_spawn: bool = True             # automatically launch agents for ready tasks
+
+
+class AgentProcessState(BaseModel):
+    """Tracks a running Claude Code agent process."""
+    agent_id: str
+    task_id: str
+    pid: int = 0
+    launched_at: str = Field(default_factory=_utc_now_iso)
+    last_heartbeat: str | None = None
+    last_activity: str | None = None
+    status: str = "running"   # running, completed, failed, stalled, killed
+
+
+class HumanCommand(BaseModel):
+    """A command from the human participant."""
+    command_id: str = Field(default_factory=_uuid)
+    action: str     # post_to_board, send_message, claim_task, create_task,
+                    # complete_task, set_priority, spawn_agent, kill_agent,
+                    # reply_discussion, pause, resume, complete, replan
+    payload: dict = Field(default_factory=dict)
+    timestamp: str = Field(default_factory=_utc_now_iso)
+
+
+# ---------------------------------------------------------------------------
 # Activation context (assembled by runtime for each agent activation)
 # ---------------------------------------------------------------------------
 
