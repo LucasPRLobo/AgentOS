@@ -175,8 +175,11 @@ def check_messages() -> str:
 
     parts = [f"You have {len(inbox)} message(s):\n"]
     for msg in inbox:
-        sender = msg.get("sender_id", "unknown")
-        sender_type = msg.get("sender_type", "agent")
+        # Support both formats:
+        # Legacy: {"sender_id": "...", "sender_type": "...", "content": "..."}
+        # Concurrent: {"from": "...", "content": "...", "speech_act": "..."}
+        sender = msg.get("sender_id") or msg.get("from", "unknown")
+        sender_type = msg.get("sender_type", "human" if sender == "human" else "agent")
         act = msg.get("speech_act", "inform")
         priority = msg.get("priority", "normal")
         content = msg.get("content", "")
@@ -188,8 +191,8 @@ def check_messages() -> str:
         parts.append(content)
         if act == "request":
             parts.append("(Response expected — use send_message to reply.)")
-        if act == "directive":
-            parts.append("(This is a directive — you must follow it.)")
+        if act == "directive" or sender == "human":
+            parts.append("(This is from the human lead — acknowledge and follow their direction.)")
         parts.append("")
 
     return "\n".join(parts)

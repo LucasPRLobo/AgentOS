@@ -5,21 +5,13 @@ Usage:
     python examples/workspace_live.py <workspace.yaml>
 
 Navigation:
-    Tab         Cycle views: Home → Agent chats → Board → Tasks
-    ← →         Cycle agents (in agent chat view)
-    Ctrl+Q      Quit
-    Ctrl+P      Pause/Resume
-
-Input:
-    Type text   Chat with coordinator (home) or current agent
-    /board      Post to shared board
-    /tasks      Show task list
-    /claim N    Claim task N as worker
-    /task Title Create new task
-    /msg A text Direct message agent A
-    /files      Show workspace files
-    /status     Show detailed status
-    /quit       Stop workspace
+    F1                Home (coordinator chat)
+    F2                Agent DMs (← → to cycle agents)
+    F3                Board
+    F4                Tasks
+    Ctrl+← / Ctrl+→  Cycle views
+    Ctrl+Q            Quit
+    Ctrl+P            Pause/Resume
 """
 
 from __future__ import annotations
@@ -42,18 +34,13 @@ from textual.suggester import SuggestFromList
 from textual.widgets import Footer, Input, RichLog, Static
 
 
-# ── Command autocomplete ───────────────────────────────────────────
-
 COMMANDS = [
     "/board", "/tasks", "/claim ", "/task ", "/msg ",
-    "/files", "/status", "/pause", "/resume", "/quit",
-    "/help",
+    "/files", "/status", "/pause", "/resume", "/quit", "/help",
 ]
 
 
 class CommandSuggester(SuggestFromList):
-    """Autocomplete for /commands."""
-
     def __init__(self):
         super().__init__(COMMANDS, case_sensitive=False)
 
@@ -63,17 +50,14 @@ class CommandSuggester(SuggestFromList):
         return await super().get_suggestion(value)
 
 
-# ── App ────────────────────────────────────────────────────────────
-
 class WorkspaceTUI(App):
-    """AgentOS workspace — messenger-style terminal interface."""
-
     TITLE = "AgentOS"
+    ENABLE_COMMAND_PALETTE = False
+    # Hold Shift + mouse drag to select text for copying
+    # (Shift bypasses Textual's mouse capture in most terminals)
 
     CSS = """
-    Screen {
-        background: $surface-darken-1;
-    }
+    Screen { background: $surface-darken-1; }
 
     #header {
         height: 1;
@@ -82,66 +66,44 @@ class WorkspaceTUI(App):
         padding: 0 2;
     }
 
-    #body {
-        height: 1fr;
-    }
+    #body { height: 1fr; }
 
-    /* Left column: agents + tasks */
     #sidebar {
-        width: 32;
+        width: 30;
         border-right: solid $surface-lighten-2;
     }
-
     #sidebar-label {
-        height: 1;
-        color: $text-muted;
-        background: $surface;
-        padding: 0 1;
+        height: 1; color: $text-muted;
+        background: $surface; padding: 0 1;
     }
-
-    #agent-list {
-        height: 1fr;
-        padding: 0 1;
-    }
-
-    #task-summary {
-        height: auto;
-        max-height: 12;
-        border-top: solid $surface-lighten-1;
-        padding: 0 1;
-    }
-
+    #agent-list { height: 1fr; padding: 0 1; overflow-y: auto; }
     #task-label {
-        height: 1;
-        color: $text-muted;
-        background: $surface;
-        padding: 0 1;
+        height: 1; color: $text-muted;
+        background: $surface; padding: 0 1;
+    }
+    #task-summary {
+        height: auto; max-height: 14;
+        border-top: solid $surface-lighten-1;
+        padding: 0 1; overflow-y: auto;
     }
 
-    /* Right column: chat */
-    #chat-area {
-        width: 1fr;
-    }
+    #main { width: 1fr; }
 
     #chat-label {
-        height: 1;
-        color: $text;
-        background: $surface;
-        padding: 0 1;
+        height: 1; color: $text;
+        background: $primary-background; padding: 0 1;
     }
-
     #chat-log {
-        height: 1fr;
-        padding: 0 1;
+        height: 1fr; padding: 0 1;
         scrollbar-size: 1 1;
     }
 
-    #activity-log {
-        height: 6;
+    /* Activity strip — compact, dim */
+    #activity-strip {
+        height: 4;
         border-top: dashed $surface-lighten-1;
         padding: 0 1;
         scrollbar-size: 1 1;
-        color: $text-muted;
     }
 
     #input-bar {
@@ -150,14 +112,9 @@ class WorkspaceTUI(App):
         border-top: solid $primary;
         padding: 0 1;
     }
-
-    #cmd-input {
-        width: 1fr;
-    }
-
-    #view-indicator {
-        width: auto;
-        min-width: 10;
+    #cmd-input { width: 1fr; }
+    #view-tag {
+        width: auto; min-width: 16;
         color: $text-muted;
         padding: 0 1;
         content-align: right middle;
@@ -167,27 +124,32 @@ class WorkspaceTUI(App):
     BINDINGS = [
         Binding("ctrl+q", "quit_app", "Quit", priority=True),
         Binding("ctrl+p", "toggle_pause", "Pause/Resume"),
-        Binding("tab", "next_view", "Next view"),
-        Binding("shift+tab", "prev_view", "Prev view"),
-        Binding("right", "next_agent", "Next agent", show=False),
-        Binding("left", "prev_agent", "Prev agent", show=False),
+        Binding("ctrl+right", "next_view", "Next view", priority=True),
+        Binding("ctrl+left", "prev_view", "Prev view", priority=True),
+        Binding("f1", "go_home", "Home", priority=True),
+        Binding("f2", "go_agents", "Agents", priority=True),
+        Binding("f3", "go_board", "Board", priority=True),
+        Binding("f4", "go_tasks", "Tasks", priority=True),
     ]
 
-    # Views: home, agent:<id>, board, tasks
     current_view: str = "home"
     agent_index: int = 0
 
-    def __init__(self, yaml_path: Path):
+    def __init__(self, yaml_path: Path, mock: bool = False, skip_coordinator: bool = False):
         super().__init__()
         self.yaml_path = yaml_path
+        self.mock = mock
+        self.skip_coordinator = skip_coordinator
         self.runtime = None
         self.supervisor = None
         self.workspace = None
         self._events: list[dict] = []
-        self._events_lock = threading.Lock()
+        self._lock = threading.Lock()
         self._seen: set[int] = set()
         self._agent_ids: list[str] = []
         self._views = ["home", "board", "tasks"]
+        self._chat_history: dict[str, list[str]] = {}
+        self._board_posts: list[dict] = []
 
     def compose(self) -> ComposeResult:
         yield Static("", id="header")
@@ -197,25 +159,26 @@ class WorkspaceTUI(App):
                 yield Static("", id="agent-list")
                 yield Static("[bold dim]TASKS[/]", id="task-label")
                 yield Static("", id="task-summary")
-            with Vertical(id="chat-area"):
-                yield Static("[bold dim]COORDINATOR[/]", id="chat-label")
+            with Vertical(id="main"):
+                yield Static("[bold]COORDINATOR[/]", id="chat-label")
                 yield RichLog(id="chat-log", wrap=True, markup=True)
-                yield RichLog(id="activity-log", wrap=True, markup=True)
+                yield RichLog(id="activity-strip", wrap=True, markup=True)
         with Horizontal(id="input-bar"):
             yield Input(
                 placeholder="Chat with coordinator… (or /command)",
                 id="cmd-input",
                 suggester=CommandSuggester(),
             )
-            yield Static("[dim]home[/]", id="view-indicator")
+            yield Static("[dim]🏠 home[/]", id="view-tag")
         yield Footer()
 
     async def on_mount(self) -> None:
-        try:
-            subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
-        except FileNotFoundError:
-            self.chat("[red]ERROR: claude CLI not found[/]")
-            return
+        if not self.mock:
+            try:
+                subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
+            except FileNotFoundError:
+                self._chat_write("[red]ERROR: claude CLI not found[/]")
+                return
 
         tmpdir = Path(tempfile.mkdtemp(prefix="agentos_live_"))
         self.workspace = tmpdir / "workspace"
@@ -225,6 +188,7 @@ class WorkspaceTUI(App):
         from agentos.kernel.event_log import SQLiteEventLog
         from agentos.kernel.seq import SeqCounter
         from agentos.workspace.runtime import WorkspaceRuntime
+        from agentos.workspace.schemas import BacklogTask
 
         config = load_workspace_config(self.yaml_path)
         event_log = SQLiteEventLog(str(tmpdir / "workspace.db"))
@@ -243,20 +207,213 @@ class WorkspaceTUI(App):
         self._agent_ids = [p.name for p in config.team if p.type == "agent"]
         self._views = ["home"] + [f"agent:{a}" for a in self._agent_ids] + ["board", "tasks"]
 
-        # Header
         self.query_one("#header").update(
             f" [bold green]AgentOS[/] │ {config.name}"
         )
 
-        self.chat(f"[dim]Workspace: {config.name}[/]")
-        self.chat(f"[dim]Goal: {config.goal.strip()[:150]}[/]")
-        self.chat(f"[dim]Team: {', '.join(p.name for p in config.team)}[/]")
-        self.chat("")
-        self.chat("[yellow]coordinator[/]: Starting up… I'll read the project and set up the team.")
-        self.chat("")
+        self._add_to_view("home", f"[dim]Goal: {config.goal.strip()[:150]}[/]")
+        self._add_to_view("home", f"[dim]Team: {', '.join(p.name for p in config.team)}[/]")
+        self._add_to_view("home", "")
 
-        self.run_supervisor()
+        if self.mock:
+            self._add_to_view("home", "[yellow]coordinator[/]: Mock mode — tasks pre-loaded, no real agents.")
+            self._add_to_view("home", "")
+            self._setup_mock()
+        elif self.skip_coordinator:
+            self._add_to_view("home", "[yellow]coordinator[/]: Tasks pre-loaded. Launching agents now.")
+            self._add_to_view("home", "")
+            self._preload_tasks()
+            self.run_supervisor()
+        else:
+            self._add_to_view("home", "[yellow]coordinator[/]: Starting up… I'll read the project and set up the team.")
+            self.run_supervisor()
+
         self.set_interval(1.0, self._refresh)
+
+    # ── Pre-load tasks (skip coordinator) ─────────────────────────
+
+    def _preload_tasks(self) -> None:
+        """Pre-load tasks so the supervisor skips coordinator decomposition."""
+        from agentos.workspace.schemas import BacklogTask
+
+        self.runtime.start()
+
+        t1 = self.runtime.add_task(BacklogTask(
+            title="Research dashboard UX patterns",
+            description="Research Linear, Asana, Notion UX patterns. Write findings to ux-research.md.",
+            created_by="coordinator", suggested_for="ui-researcher", priority="high",
+        ))
+        t2 = self.runtime.add_task(BacklogTask(
+            title="Audit existing frontend components",
+            description="Review existing React components in agentos/dashboard/frontend/src/. Identify gaps. Write to gap-analysis.md.",
+            created_by="coordinator", suggested_for="designer", priority="high",
+        ))
+        t3 = self.runtime.add_task(BacklogTask(
+            title="Design component architecture",
+            description="Design React component tree, state management, WebSocket integration. Write to architecture.md.",
+            created_by="coordinator", suggested_for="architect", priority="normal",
+            depends_on=[t1, t2],
+        ))
+        self.runtime.backlog.recompute_priorities()
+
+        self._add_to_view("home", f"  [green]●[/] ui-researcher → Research dashboard UX patterns")
+        self._add_to_view("home", f"  [green]●[/] designer → Audit existing frontend components")
+        self._add_to_view("home", f"  [dim]○[/] architect → waiting (depends on research + audit)")
+
+    # ── Mock mode ──────────────────────────────────────────────────
+
+    def _setup_mock(self) -> None:
+        """Pre-load tasks and simulate agent activity. Zero tokens."""
+        from agentos.workspace.schemas import BacklogTask
+        from agentos.comms.schemas import BoardPost, BoardSection, SpeechAct
+
+        self.runtime.start()
+
+        # Pre-load tasks (skip coordinator decomposition)
+        t1 = self.runtime.add_task(BacklogTask(
+            title="Research dashboard UX patterns",
+            description="Research Linear, Asana, Notion UX patterns for dashboards.",
+            created_by="coordinator", suggested_for="ui-researcher", priority="high",
+        ))
+        t2 = self.runtime.add_task(BacklogTask(
+            title="Audit existing frontend components",
+            description="Review existing React components and identify gaps.",
+            created_by="coordinator", suggested_for="designer", priority="high",
+        ))
+        t3 = self.runtime.add_task(BacklogTask(
+            title="Design React component architecture",
+            description="Design component tree, state management, WebSocket integration.",
+            created_by="coordinator", suggested_for="architect", priority="normal",
+            depends_on=[t1, t2],
+        ))
+        self.runtime.backlog.recompute_priorities()
+
+        # Simulate some board activity
+        self.runtime.board.post(BoardPost(
+            section=BoardSection.POST, author_type="agent", author_id="coordinator",
+            content="Team set up. 3 tasks created. Research and audit running in parallel, architecture will follow.",
+            speech_act=SpeechAct.INFORM,
+        ))
+
+        self._add_to_view("home", "[yellow]coordinator[/]: Team set up. 3 tasks created.")
+        self._add_to_view("home", "  [green]●[/] ui-researcher → Research dashboard UX patterns")
+        self._add_to_view("home", "  [green]●[/] designer → Audit existing frontend components")
+        self._add_to_view("home", "  [dim]○[/] architect → waiting for research + audit")
+        self._add_to_view("home", "")
+        self._add_to_view("home", "[yellow]coordinator[/]: What aspects should we prioritize?")
+
+        # Start the mock supervisor (simulates tick updates without real agents)
+        self._run_mock_supervisor()
+
+    @work(thread=True)
+    def _run_mock_supervisor(self) -> None:
+        """Simulated supervisor — just processes human commands and updates UI."""
+        import asyncio as _asyncio
+        loop = _asyncio.new_event_loop()
+
+        from agentos.comms.comms_state import read_human_commands, write_board_file
+        from agentos.comms.schemas import BoardPost, BoardSection, SpeechAct
+
+        self.runtime.board.update_agent_status(
+            __import__("agentos.comms.schemas", fromlist=["AgentStatus"]).AgentStatus(
+                agent_id="coordinator", agent_name="coordinator",
+                role="Project coordination", state="idle",
+            )
+        )
+
+        while self.runtime.state.status == "active":
+            # Process human commands
+            if self.workspace:
+                cmds = read_human_commands(self.workspace)
+                for cmd in cmds:
+                    action = cmd.get("action", "")
+                    payload = cmd.get("payload", {})
+
+                    if action == "post_to_board":
+                        content = payload.get("content", "")
+                        self.runtime.board.post(BoardPost(
+                            section=BoardSection(payload.get("section", "post")),
+                            author_type="human", author_id="human",
+                            content=content,
+                            speech_act=SpeechAct(payload.get("speech_act", "inform")),
+                        ))
+                        with self._lock:
+                            self._events.append({
+                                "type": "board_post", "author": "human", "content": content,
+                            })
+                        # Simulate coordinator response
+                        import random
+                        responses = [
+                            f"Got it. I'll pass that to the team.",
+                            f"Noted. Adjusting priorities accordingly.",
+                            f"Good point. I'll have the researcher look into that.",
+                            f"Understood. Let me update the plan.",
+                        ]
+                        resp = random.choice(responses)
+                        with self._lock:
+                            self._events.append({
+                                "type": "board_post", "author": "coordinator", "content": resp,
+                            })
+                        self.runtime.board.post(BoardPost(
+                            section=BoardSection.POST, author_type="agent",
+                            author_id="coordinator", content=resp,
+                            speech_act=SpeechAct.INFORM,
+                        ))
+
+                    elif action == "send_message":
+                        to = payload.get("to", "")
+                        content = payload.get("content", "")
+                        # Simulate agent response
+                        if to and content:
+                            import random
+                            agent_responses = [
+                                f"Thanks for the direction. I'll focus on that.",
+                                f"Good question. Based on what I've found so far, I'd suggest we consider a three-panel layout.",
+                                f"I'll look into that. Give me a moment to check the codebase.",
+                                f"Interesting point. Let me adjust my approach.",
+                            ]
+                            resp = random.choice(agent_responses)
+                            with self._lock:
+                                self._events.append({
+                                    "type": "message_to_human", "from": to, "content": resp,
+                                })
+
+                    elif action == "complete":
+                        self.runtime.complete()
+                        break
+                    elif action == "pause":
+                        self.runtime.pause()
+
+                # Write shared state
+                board_state = self.runtime.board.get_state()
+                board_data = board_state.model_dump(mode="json")
+                board_data["_compact"] = self.runtime.board.render_compact(max_tokens=400)
+                write_board_file(self.workspace, board_data)
+
+            loop.run_until_complete(_asyncio.sleep(2.0))
+
+    # ── Message routing ──────────────────────────────────────────
+
+    def _add_to_view(self, view: str, msg: str) -> None:
+        """Add a message to a specific view's history."""
+        self._chat_history.setdefault(view, []).append(msg)
+        # If we're currently on that view, also write to the log
+        if view == self.current_view:
+            self._chat_write(msg)
+
+    def _chat_write(self, msg: str) -> None:
+        """Write directly to the visible chat log."""
+        try:
+            self.query_one("#chat-log", RichLog).write(msg)
+        except Exception:
+            pass
+
+    def _activity_write(self, msg: str) -> None:
+        """Write to the activity strip."""
+        try:
+            self.query_one("#activity-strip", RichLog).write(msg)
+        except Exception:
+            pass
 
     # ── Supervisor ────────────────────────────────────────────────
 
@@ -265,7 +422,7 @@ class WorkspaceTUI(App):
         loop = asyncio.new_event_loop()
 
         def event_cb(event):
-            with self._events_lock:
+            with self._lock:
                 self._events.append(event)
                 if len(self._events) > 500:
                     self._events[:] = self._events[-300:]
@@ -292,8 +449,7 @@ class WorkspaceTUI(App):
         if not self.runtime:
             return
 
-        # Process new events
-        with self._events_lock:
+        with self._lock:
             events = list(self._events)
 
         for event in events:
@@ -301,79 +457,83 @@ class WorkspaceTUI(App):
             if eid in self._seen:
                 continue
             self._seen.add(eid)
-            self._handle_event(event)
+            self._route_event(event)
 
-        # Update sidebar
         self._update_sidebar()
         self._update_header()
 
-    def _handle_event(self, e: dict) -> None:
+    def _route_event(self, e: dict) -> None:
+        """Route events to the correct view — NOT everything to the chat."""
         t = e.get("type", "")
 
         if t == "board_post":
             author = e.get("author", "?")
-            content = e.get("content", "")[:120]
-            if self.current_view == "board":
-                if author == "human":
-                    self.chat(f"[cyan bold]you[/]: {content}")
-                else:
-                    self.chat(f"[magenta]{author}[/]: {content}")
-            # Also show on home view
-            elif self.current_view == "home":
-                self.chat(f"[dim]board ›[/] [magenta]{author}[/]: {content[:80]}")
+            content = e.get("content", "")
+            # Skip raw board renders that leak into events
+            if "[WORKSPACE BOARD" in content or "[END BOARD]" in content:
+                return
+            if content.startswith("PINNED:") or content.startswith("Team:"):
+                return
+            content = content[:120]
+            self._board_posts.append(e)
+            # Board view: show the post
+            if author == "human":
+                self._add_to_view("board", f"[cyan bold]you[/]: {content}")
+            else:
+                self._add_to_view("board", f"[magenta]{author}[/]: {content}")
+            # Home view: show a COMPACT one-line notification (not the full post)
+            short = content[:60] + "…" if len(content) > 60 else content
+            self._add_to_view("home", f"  [dim]📋 {author}:[/] {short}")
 
         elif t == "agent_spawned":
             agent = e.get("agent", "?")
             task = e.get("task", "?")
-            self.chat(f"[green]● {agent}[/] started: {task}")
+            self._add_to_view("home", f"  [green]●[/] [bold]{agent}[/] started: {task}")
+            self._add_to_view(f"agent:{agent}", f"[dim]Started task: {task}[/]")
 
         elif t == "agent_completed":
             agent = e.get("agent", "?")
             task = e.get("task", "?")
             files = e.get("files", [])
             f_str = f" → {', '.join(files[:3])}" if files else ""
-            self.chat(f"[green]✓ {agent}[/] completed: {task}{f_str}")
+            self._add_to_view("home", f"  [green]✓[/] [bold]{agent}[/] completed: {task}{f_str}")
+            self._add_to_view(f"agent:{agent}", f"[green]Completed: {task}{f_str}[/]")
 
         elif t == "agent_killed":
-            self.chat(f"[red]✗ {e.get('agent')}[/] killed: {e.get('reason', '?')}")
+            agent = e.get("agent", "?")
+            reason = e.get("reason", "?")
+            self._add_to_view("home", f"  [red]✗[/] {agent} killed: {reason}")
+            self._add_to_view(f"agent:{agent}", f"[red]Killed: {reason}[/]")
 
         elif t == "agent_activity":
             agent = e.get("agent", "?")
             activity = e.get("activity", "")
-            # Show in activity log (bottom strip)
-            try:
-                self.query_one("#activity-log", RichLog).write(
-                    f"[dim]{agent}: {activity}[/]"
-                )
-            except Exception:
-                pass
-            # If viewing this agent's chat, show there too
-            if self.current_view == f"agent:{agent}":
-                self.chat(f"[dim]  {activity}[/]")
+            # Always show in activity strip (bottom)
+            self._activity_write(f"[dim]{agent}: {activity}[/]")
+            # Show in agent's dedicated chat view
+            self._add_to_view(f"agent:{agent}", f"  [dim]{activity}[/]")
 
         elif t == "message_to_human":
             sender = e.get("from", "?")
-            content = e.get("content", "")[:100]
-            self.chat(f"[yellow]💬 {sender}[/]: {content}")
+            content = e.get("content", "")[:120]
+            # Show in home AND in the sender's agent view
+            self._add_to_view("home", f"  [yellow]💬 {sender}[/]: {content}")
+            self._add_to_view(f"agent:{sender}", f"[yellow]{sender}[/]: {content}")
 
         elif t == "workspace_completed":
-            self.chat(f"[green bold]■ Workspace completed: {e.get('reason', '?')}[/]")
+            self._add_to_view("home", f"[green bold]■ Workspace completed: {e.get('reason', '?')}[/]")
 
         elif t == "plan_created":
             count = e.get("task_count", 0)
-            self.chat(f"[yellow]coordinator[/]: Plan ready — {count} tasks created. Team is starting.")
+            self._add_to_view("home", f"  [yellow]coordinator[/]: Plan ready — {count} tasks created.")
 
         elif t == "status":
             verb = e.get("verb", "")
             msg = e.get("message", "")
-            # Show coordinator planning activity
-            if verb == "Coordinator" or verb == "Planning":
-                try:
-                    self.query_one("#activity-log", RichLog).write(
-                        f"[dim]{verb}: {msg}[/]"
-                    )
-                except Exception:
-                    pass
+            if verb in ("Coordinator", "Planning"):
+                self._activity_write(f"[dim]{verb}: {msg}[/]")
+
+    # ── Sidebar updates ───────────────────────────────────────────
 
     def _update_sidebar(self) -> None:
         if not self.runtime:
@@ -382,7 +542,6 @@ class WorkspaceTUI(App):
         board = self.runtime.board.get_state()
         active = getattr(self.supervisor, '_active', {}) if self.supervisor else {}
 
-        # Agent list
         agent_lines = []
         for s in board.team_status:
             aid = s.agent_id
@@ -392,30 +551,31 @@ class WorkspaceTUI(App):
             if is_running:
                 last = self._last_activity(aid)
                 elapsed = self._agent_elapsed(active.get(aid))
-                short_activity = (last[:20] + "…") if len(last) > 20 else last if last else ""
-                agent_lines.append(f"[green]●[/] [bold]{aid}[/]\n  [dim]{short_activity} {elapsed}[/]")
+                short = (last[:18] + "…") if len(last) > 18 else last if last else ""
+                agent_lines.append(f"[green]●[/] [bold]{aid}[/]\n  [dim]{short} {elapsed}[/]")
             elif is_human:
                 agent_lines.append(f"[cyan]◉[/] [bold]{aid}[/] [dim](you)[/]")
+            elif aid == "coordinator" or aid == "Coordinator":
+                agent_lines.append(f"[yellow]◆[/] [dim]{aid}[/]")
             else:
                 agent_lines.append(f"[dim]○ {aid}[/]")
 
         try:
-            self.query_one("#agent-list").update("\n".join(agent_lines) if agent_lines else "[dim]No agents[/]")
+            self.query_one("#agent-list").update("\n".join(agent_lines) or "[dim]No agents[/]")
         except Exception:
             pass
 
-        # Task summary
         tasks = self.runtime.backlog.get_all_tasks()
         task_lines = []
-        for t in tasks[:8]:
+        for t in tasks[:10]:
             icon = "[green]✓[/]" if t.status == "done" else "[yellow]●[/]" if "progress" in t.status else "[red]🔒[/]" if t.status == "blocked" else "[dim]○[/]"
-            name = (t.title[:22] + "…") if len(t.title) > 22 else t.title
+            name = (t.title[:20] + "…") if len(t.title) > 20 else t.title
             task_lines.append(f"{icon} {name}")
-        if len(tasks) > 8:
-            task_lines.append(f"[dim]  +{len(tasks) - 8} more[/]")
+        if len(tasks) > 10:
+            task_lines.append(f"[dim]+{len(tasks) - 10} more[/]")
 
         try:
-            self.query_one("#task-summary").update("\n".join(task_lines) if task_lines else "[dim]No tasks yet[/]")
+            self.query_one("#task-summary").update("\n".join(task_lines) or "[dim]No tasks[/]")
         except Exception:
             pass
 
@@ -426,42 +586,34 @@ class WorkspaceTUI(App):
         done = sum(1 for t in tasks if t.status == "done")
         status = self.runtime.state.status
         icon = "[green]●[/]" if status == "active" else "[yellow]●[/]"
-        active_count = len(getattr(self.supervisor, '_active', {})) if self.supervisor else 0
+        n_active = len(getattr(self.supervisor, '_active', {})) if self.supervisor else 0
 
         try:
             self.query_one("#header").update(
                 f" [bold green]AgentOS[/] │ {self.runtime.config.name} │ "
                 f"{icon} {status.upper()} │ {done}/{len(tasks)} tasks │ "
-                f"{active_count} agents running"
+                f"{n_active} agents running"
             )
         except Exception:
             pass
 
     def _last_activity(self, agent_id: str) -> str:
-        with self._events_lock:
+        with self._lock:
             for e in reversed(self._events):
                 if e.get("type") == "agent_activity" and e.get("agent") == agent_id:
                     return e.get("activity", "")
         return ""
 
     def _agent_elapsed(self, info) -> str:
-        if info is None:
+        if not info:
             return ""
         launch = getattr(info, "_launch_mono", None)
-        if launch is None:
+        if not launch:
             return ""
         e = time.monotonic() - launch
         return f"{e:.0f}s" if e < 60 else f"{e / 60:.1f}m"
 
-    # ── Chat output ───────────────────────────────────────────────
-
-    def chat(self, message: str) -> None:
-        try:
-            self.query_one("#chat-log", RichLog).write(message)
-        except Exception:
-            pass
-
-    # ── Input handling ────────────────────────────────────────────
+    # ── Input ─────────────────────────────────────────────────────
 
     @on(Input.Submitted, "#cmd-input")
     def on_input(self, event: Input.Submitted) -> None:
@@ -469,37 +621,38 @@ class WorkspaceTUI(App):
         event.input.clear()
         if not line:
             return
-
         if line.startswith("/"):
             self._handle_command(line)
         else:
             self._handle_message(line)
 
     def _handle_message(self, text: str) -> None:
-        """Send a message — to coordinator (home), to agent (agent view), or to board."""
         if not self.workspace:
             return
-
         from agentos.comms.comms_state import write_human_command
 
-        if self.current_view == "home":
-            # Chat with coordinator — post as directive, coordinator sees it
-            self.chat(f"[cyan bold]you[/]: {text}")
+        view = self.current_view
+
+        if view == "home":
+            # Talking to coordinator → post as directive on board
+            self._add_to_view("home", f"[cyan bold]you[/]: {text}")
             write_human_command(self.workspace, {
                 "action": "post_to_board",
                 "payload": {"content": text, "section": "post", "speech_act": "directive"},
             })
 
-        elif self.current_view.startswith("agent:"):
-            agent_id = self.current_view.split(":", 1)[1]
-            self.chat(f"[cyan bold]you → {agent_id}[/]: {text}")
+        elif view.startswith("agent:"):
+            # DM to specific agent
+            agent_id = view.split(":", 1)[1]
+            self._add_to_view(view, f"[cyan bold]you[/]: {text}")
             write_human_command(self.workspace, {
                 "action": "send_message",
                 "payload": {"to": agent_id, "content": text},
             })
 
-        elif self.current_view == "board":
-            self.chat(f"[cyan bold]you[/]: {text}")
+        elif view == "board":
+            # Post to board
+            self._add_to_view("board", f"[cyan bold]you[/]: {text}")
             write_human_command(self.workspace, {
                 "action": "post_to_board",
                 "payload": {"content": text, "section": "post", "speech_act": "inform"},
@@ -511,54 +664,59 @@ class WorkspaceTUI(App):
         if line in ("/quit", "/q"):
             if self.workspace:
                 write_human_command(self.workspace, {"action": "complete", "payload": {}})
-            self.chat("[yellow]Stopping…[/]")
+            self._chat_write("[yellow]Stopping…[/]")
             self.set_timer(1.5, self.exit)
 
         elif line == "/pause":
             if self.workspace:
                 write_human_command(self.workspace, {"action": "pause", "payload": {}})
-            self.chat("[yellow]Paused.[/]")
+            self._chat_write("[yellow]Paused.[/]")
 
         elif line == "/resume":
             if self.workspace:
                 write_human_command(self.workspace, {"action": "resume", "payload": {}})
-            self.chat("[green]Resumed.[/]")
+            self._chat_write("[green]Resumed.[/]")
 
         elif line == "/tasks":
             if self.runtime:
+                self._chat_write("[bold]Tasks:[/]")
                 for i, t in enumerate(self.runtime.backlog.get_all_tasks(), 1):
                     a = f" → {t.assigned_to}" if t.assigned_to else ""
                     icon = "✓" if t.status == "done" else "●" if "progress" in t.status else "🔒" if t.status == "blocked" else "○"
-                    self.chat(f"  {icon} {i}. [{t.status}] {t.title}{a}")
+                    self._chat_write(f"  {icon} {i}. [{t.status}] {t.title}{a}")
 
         elif line == "/board":
             if self.runtime:
-                self.chat(self.runtime.board.render_compact(max_tokens=400))
+                self._chat_write(self.runtime.board.render_compact(max_tokens=500))
 
         elif line == "/files":
             if self.workspace:
+                self._chat_write("[bold]Files:[/]")
                 for f in sorted(self.workspace.rglob("*")):
                     if f.is_file() and ".agentos" not in str(f) and "backlog" not in str(f):
-                        self.chat(f"  {f.relative_to(self.workspace)} ({f.stat().st_size:,}b)")
+                        self._chat_write(f"  {f.relative_to(self.workspace)} ({f.stat().st_size:,}b)")
 
         elif line == "/status":
             if self.runtime:
                 board = self.runtime.board.get_state()
+                self._chat_write("[bold]Agent status:[/]")
                 for s in board.team_status:
                     last = self._last_activity(s.agent_id)
                     extra = f" — {last}" if last else ""
-                    self.chat(f"  {s.agent_name}: {s.state}{extra}")
+                    self._chat_write(f"  {s.agent_name}: {s.state}{extra}")
 
         elif line.startswith("/msg "):
             parts = line[5:].split(" ", 1)
             if len(parts) == 2 and self.workspace:
+                agent_id, content = parts
                 write_human_command(self.workspace, {
                     "action": "send_message",
-                    "payload": {"to": parts[0], "content": parts[1]},
+                    "payload": {"to": agent_id, "content": content},
                 })
-                self.chat(f"[cyan]→ {parts[0]}[/]: {parts[1]}")
+                self._add_to_view(f"agent:{agent_id}", f"[cyan bold]you[/]: {content}")
+                self._chat_write(f"[cyan]→ {agent_id}[/]: {content}")
             else:
-                self.chat("[dim]Usage: /msg <agent> <text>[/]")
+                self._chat_write("[dim]Usage: /msg <agent> <text>[/]")
 
         elif line.startswith("/task "):
             title = line[6:].strip()
@@ -567,7 +725,7 @@ class WorkspaceTUI(App):
                     "action": "create_task",
                     "payload": {"title": title},
                 })
-                self.chat(f"[dim]Task created: {title}[/]")
+                self._chat_write(f"[dim]Task created: {title}[/]")
 
         elif line.startswith("/claim "):
             if self.runtime and self.workspace:
@@ -579,31 +737,33 @@ class WorkspaceTUI(App):
                             "action": "claim_task",
                             "payload": {"task_id": tasks[idx].task_id, "participant": "human"},
                         })
-                        self.chat(f"[dim]Claimed: {tasks[idx].title}[/]")
+                        self._chat_write(f"[dim]Claimed: {tasks[idx].title}[/]")
                     else:
-                        self.chat("[red]Invalid task number[/]")
+                        self._chat_write("[red]Invalid task number[/]")
                 except ValueError:
-                    self.chat("[dim]Usage: /claim <number>[/]")
+                    self._chat_write("[dim]Usage: /claim <number>[/]")
 
         elif line == "/help":
-            self.chat("[bold]Commands:[/]")
-            self.chat("  [cyan]/board[/]      Show full board")
-            self.chat("  [cyan]/tasks[/]      Show task list")
-            self.chat("  [cyan]/claim N[/]    Claim task N")
-            self.chat("  [cyan]/task Title[/] Create new task")
-            self.chat("  [cyan]/msg A text[/] Message agent A")
-            self.chat("  [cyan]/files[/]      Show workspace files")
-            self.chat("  [cyan]/status[/]     Show agent details")
-            self.chat("  [cyan]/pause[/]      Pause workspace")
-            self.chat("  [cyan]/quit[/]       Stop and exit")
-            self.chat("")
-            self.chat("[bold]Navigation:[/]")
-            self.chat("  Tab        Cycle views")
-            self.chat("  ← →        Cycle agents")
-            self.chat("  Ctrl+Q     Quit")
+            self._chat_write("[bold]Commands:[/]")
+            self._chat_write("  [cyan]/board[/]       Show full board")
+            self._chat_write("  [cyan]/tasks[/]       Show task list")
+            self._chat_write("  [cyan]/claim N[/]     Claim task N")
+            self._chat_write("  [cyan]/task Title[/]  Create new task")
+            self._chat_write("  [cyan]/msg A text[/]  DM agent A")
+            self._chat_write("  [cyan]/files[/]       Workspace files")
+            self._chat_write("  [cyan]/status[/]      Agent details")
+            self._chat_write("  [cyan]/pause[/]       Pause workspace")
+            self._chat_write("  [cyan]/quit[/]        Stop and exit")
+            self._chat_write("")
+            self._chat_write("[bold]Navigation:[/]")
+            self._chat_write("  F1           Home (coordinator)")
+            self._chat_write("  F2           Agent DMs (← → cycle)")
+            self._chat_write("  F3           Board")
+            self._chat_write("  F4           Tasks")
+            self._chat_write("  Ctrl+← →    Cycle views")
 
         else:
-            self.chat(f"[dim]Unknown command. Type /help for options.[/]")
+            self._chat_write("[dim]Unknown command. Type /help[/]")
 
     # ── View navigation ───────────────────────────────────────────
 
@@ -618,57 +778,91 @@ class WorkspaceTUI(App):
         self._switch_view()
 
     def action_next_agent(self) -> None:
-        if self._agent_ids:
-            self.agent_index = (self.agent_index + 1) % len(self._agent_ids)
-            self.current_view = f"agent:{self._agent_ids[self.agent_index]}"
-            self._switch_view()
+        if not self._agent_ids or not self.current_view.startswith("agent:"):
+            return
+        self.agent_index = (self.agent_index + 1) % len(self._agent_ids)
+        self.current_view = f"agent:{self._agent_ids[self.agent_index]}"
+        self._switch_view()
 
     def action_prev_agent(self) -> None:
-        if self._agent_ids:
-            self.agent_index = (self.agent_index - 1) % len(self._agent_ids)
-            self.current_view = f"agent:{self._agent_ids[self.agent_index]}"
-            self._switch_view()
+        if not self._agent_ids or not self.current_view.startswith("agent:"):
+            return
+        self.agent_index = (self.agent_index - 1) % len(self._agent_ids)
+        self.current_view = f"agent:{self._agent_ids[self.agent_index]}"
+        self._switch_view()
 
     def _switch_view(self) -> None:
-        """Update UI when switching views."""
+        """Rebuild the chat log for the current view."""
         chat_log = self.query_one("#chat-log", RichLog)
         chat_log.clear()
 
         view = self.current_view
+
+        # View label + placeholder
         if view == "home":
-            label = "[bold dim]COORDINATOR[/]"
+            label = "[bold]COORDINATOR[/]"
             placeholder = "Chat with coordinator… (or /command)"
-            chat_log.write("[dim]Home view — chat with the coordinator, see overview[/]")
-            chat_log.write("")
+            tag = "🏠 home"
         elif view.startswith("agent:"):
             agent_id = view.split(":", 1)[1]
-            label = f"[bold dim]CHAT: {agent_id}[/]"
+            label = f"[bold]💬 {agent_id}[/]"
             placeholder = f"Message {agent_id}…"
-            chat_log.write(f"[dim]Direct chat with {agent_id}[/]")
-            chat_log.write("")
+            tag = f"💬 {agent_id}"
+            # Update agent_index to match
+            if agent_id in self._agent_ids:
+                self.agent_index = self._agent_ids.index(agent_id)
         elif view == "board":
-            label = "[bold dim]BOARD[/]"
+            label = "[bold]📋 BOARD[/]"
             placeholder = "Post to the board…"
-            if self.runtime:
-                chat_log.write(self.runtime.board.render_compact(max_tokens=600))
+            tag = "📋 board"
         elif view == "tasks":
-            label = "[bold dim]TASKS[/]"
-            placeholder = "Create task: /task <title>"
-            if self.runtime:
-                for i, t in enumerate(self.runtime.backlog.get_all_tasks(), 1):
-                    a = f" → {t.assigned_to}" if t.assigned_to else ""
-                    icon = "✓" if t.status == "done" else "●" if "progress" in t.status else "🔒" if t.status == "blocked" else "○"
-                    chat_log.write(f"  {icon} {i}. [{t.status}] {t.title}{a}")
+            label = "[bold]📝 TASKS[/]"
+            placeholder = "/claim N or /task Title"
+            tag = "📝 tasks"
         else:
-            label = "[bold dim]???[/]"
+            label = "[bold]?[/]"
             placeholder = ""
+            tag = "?"
 
         try:
             self.query_one("#chat-label").update(label)
             self.query_one("#cmd-input", Input).placeholder = placeholder
-            self.query_one("#view-indicator").update(f"[dim]{view}[/]")
+            self.query_one("#view-tag").update(f"[dim]{tag}[/]")
         except Exception:
             pass
+
+        # Replay history for this view
+        history = self._chat_history.get(view, [])
+        for msg in history[-50:]:  # last 50 messages
+            chat_log.write(msg)
+
+        # For tasks view, show current task list
+        if view == "tasks" and self.runtime and not history:
+            for i, t in enumerate(self.runtime.backlog.get_all_tasks(), 1):
+                a = f" → {t.assigned_to}" if t.assigned_to else ""
+                icon = "✓" if t.status == "done" else "●" if "progress" in t.status else "🔒" if t.status == "blocked" else "○"
+                chat_log.write(f"  {icon} {i}. [{t.status}] {t.title}{a}")
+
+        # For board view with no history, show current board
+        if view == "board" and self.runtime and not history:
+            chat_log.write(self.runtime.board.render_compact(max_tokens=600))
+
+    def action_go_home(self) -> None:
+        self.current_view = "home"
+        self._switch_view()
+
+    def action_go_agents(self) -> None:
+        if self._agent_ids:
+            self.current_view = f"agent:{self._agent_ids[self.agent_index]}"
+            self._switch_view()
+
+    def action_go_board(self) -> None:
+        self.current_view = "board"
+        self._switch_view()
+
+    def action_go_tasks(self) -> None:
+        self.current_view = "tasks"
+        self._switch_view()
 
     def action_quit_app(self) -> None:
         self._handle_command("/quit")
@@ -681,16 +875,24 @@ class WorkspaceTUI(App):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python examples/workspace_live.py <workspace.yaml>")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = [a for a in sys.argv[1:] if a.startswith("--")]
+    mock = "--mock" in flags
+    skip_coord = "--skip-coordinator" in flags
+
+    if not args:
+        print("Usage: python examples/workspace_live.py <workspace.yaml> [flags]")
+        print("")
+        print("  --mock               Simulate agents (zero tokens)")
+        print("  --skip-coordinator   Pre-load tasks, run real agents (saves coordinator tokens)")
         sys.exit(1)
 
-    yaml_path = Path(sys.argv[1])
+    yaml_path = Path(args[0])
     if not yaml_path.exists():
         print(f"File not found: {yaml_path}")
         sys.exit(1)
 
-    app = WorkspaceTUI(yaml_path)
+    app = WorkspaceTUI(yaml_path, mock=mock, skip_coordinator=skip_coord)
     app.run()
 
 

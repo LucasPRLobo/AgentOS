@@ -173,18 +173,26 @@ def write_agent_inbox(workspace: Path, agent_id: str, messages: list[dict]) -> N
     inbox_path.write_text(json.dumps(existing, indent=2))
 
 
-def read_agent_inbox(workspace: Path, agent_id: str) -> list[dict]:
-    """Read and clear an agent's inbox.json."""
+def read_agent_inbox(workspace: Path, agent_id: str, clear: bool = False) -> list[dict]:
+    """Read an agent's inbox.json. Only clears if clear=True."""
     agent_dir = _agentos_dir(workspace) / "agents" / agent_id
     inbox_path = agent_dir / "inbox.json"
     if not inbox_path.exists():
         return []
     try:
         messages = json.loads(inbox_path.read_text())
-        inbox_path.write_text("[]")
+        if clear:
+            inbox_path.write_text("[]")
         return messages
     except (json.JSONDecodeError, OSError):
         return []
+
+
+def clear_agent_inbox(workspace: Path, agent_id: str) -> None:
+    """Clear an agent's inbox after they've completed."""
+    inbox_path = _agentos_dir(workspace) / "agents" / agent_id / "inbox.json"
+    if inbox_path.exists():
+        inbox_path.write_text("[]")
 
 
 def read_agent_outbox(workspace: Path, agent_id: str) -> list[dict]:
