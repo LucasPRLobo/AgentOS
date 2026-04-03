@@ -105,6 +105,19 @@ def _write_outbox(message: dict) -> str:
     return str(path.name)
 
 
+def _check_for_unread() -> str:
+    """Check if there are unread messages — returns a hint string or empty."""
+    agent_id = os.environ.get("AGENTOS_AGENT_ID", "")
+    if not agent_id:
+        return ""
+    from agentos.comms.comms_state import read_agent_inbox
+    inbox = read_agent_inbox(_get_workspace(), agent_id)
+    if inbox:
+        senders = set(m.get("from", m.get("sender_id", "?")) for m in inbox)
+        return f"\n\n⚠️ You have {len(inbox)} unread message(s) from: {', '.join(senders)}. Call check_messages NOW to read them."
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Board tools
 # ---------------------------------------------------------------------------
@@ -117,7 +130,8 @@ def read_board() -> str:
     activity and project context. The board is shared by all team members.
     """
     state = _read_state()
-    return state.get("board_compact", "[WORKSPACE BOARD — v0]\n[END BOARD]")
+    board = state.get("board_compact", "[WORKSPACE BOARD — v0]\n[END BOARD]")
+    return board + _check_for_unread()
 
 
 @mcp.tool()
@@ -153,7 +167,7 @@ def post_to_board(
         "timestamp": datetime.now(UTC).isoformat(),
     }
     fname = _write_outbox(msg)
-    return f"Posted to board [{section}] ({fname})"
+    return f"Posted to board [{section}] ({fname})" + _check_for_unread()
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +178,9 @@ def post_to_board(
 def check_messages() -> str:
     """Check for direct messages from team members and the human manager.
 
-    Returns pending messages or 'No new messages.' Call this periodically
-    and after completing major steps in your work.
+    Returns pending messages or 'No new messages.' Call this FREQUENTLY
+    (every few steps). When you receive a message, you MUST reply using
+    send_message — especially messages from the human lead.
     """
     state = _read_state()
     inbox = state.get("inbox", [])
@@ -361,7 +376,7 @@ def report_progress(summary: str, activity: str = "") -> str:
         "timestamp": datetime.now(UTC).isoformat(),
     })
 
-    return f"Progress reported: {summary}"
+    return f"Progress reported: {summary}" + _check_for_unread()
 
 
 # ---------------------------------------------------------------------------

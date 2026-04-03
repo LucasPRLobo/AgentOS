@@ -55,6 +55,29 @@ from agentos.workspace.schemas import (
 logger = logging.getLogger(__name__)
 
 
+class PersistentAgent:
+    """Tracks a persistent agent with resumable Claude Code session.
+
+    Agents are never killed after a task. They go IDLE and can be
+    woken up for messages or new tasks via `claude --continue`.
+    """
+
+    def __init__(self, agent_id: str, workspace_id: str):
+        self.agent_id = agent_id
+        self.session_name = f"agentos-{workspace_id}-{agent_id}"
+        self.state: str = "idle"           # idle, working, responding
+        self.current_task_id: str | None = None
+        self.current_proc: subprocess.Popen | None = None
+        self.session_started: bool = False  # Has the first turn happened?
+        self.pending_messages: list[dict] = []  # DMs queued while busy
+        self.launch_time: float | None = None
+        self.last_activity: str = ""
+
+    @property
+    def is_busy(self) -> bool:
+        return self.state in ("working", "responding")
+
+
 class WorkspaceSupervisor:
     """Persistent supervisor for concurrent workspace execution.
 
@@ -69,11 +92,19 @@ class WorkspaceSupervisor:
     def __init__(self, runtime, config: SupervisorConfig | None = None):
         self._rt = runtime
         self._config = config or SupervisorConfig()
-        self._active: dict[str, AgentProcessState] = {}
+        self._active: dict[str, AgentProcessState] = {}  # backward compat
         self._procs: dict[str, subprocess.Popen] = {}
         self._stdout_threads: dict[str, threading.Thread] = {}
         self._tick_count = 0
         self._last_coordinator_time = 0.0
+        self._pending_human_messages: list[str] = []
+
+        # Persistent agents — never killed, only go idle
+        self._agents: dict[str, PersistentAgent] = {}
+        wf_id = runtime._workflow_id if hasattr(runtime, '_workflow_id') else "ws"
+        for p in runtime.config.team:
+            if p.type == "agent":
+                self._agents[p.name] = PersistentAgent(p.name, wf_id)
 
         # Callbacks (set by CLI/dashboard)
         self._on_event = None       # fn(event_dict) — for live display
@@ -143,6 +174,12 @@ class WorkspaceSupervisor:
         # Check stalls
         self._check_stalls()
 
+        # 2b. Coordinator responses to human messages
+        self._process_coordinator_responses()
+
+        # 2c. Wake idle agents that have pending DMs
+        self._wake_agents_for_messages()
+
         # 3. SPAWN (up to concurrency limit)
         if self._config.auto_spawn:
             self._spawn_ready_agents()
@@ -161,10 +198,61 @@ class WorkspaceSupervisor:
     # Agent process management
     # ------------------------------------------------------------------
 
+    def _build_agent_cmd(
+        self, agent_id: str, prompt: str,
+        max_turns: int = 15,
+        model: str | None = None,
+    ) -> list[str]:
+        """Build the claude CLI command for an agent invocation."""
+        workspace = self._rt._workspace_dir
+        agent = self._agents.get(agent_id)
+
+        cmd = [
+            "claude", "--print",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--max-turns", str(max_turns),
+            "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash",
+            "--disallowedTools", "Agent,TodoWrite,ToolSearch",
+            "--name", agent.session_name if agent else f"agentos-{agent_id}",
+        ]
+
+        if model:
+            cmd.extend(["--model", model])
+
+        # Use --continue for subsequent turns (persistent session)
+        if agent and agent.session_started:
+            cmd.append("--continue")
+
+        if self._rt._project_dir and self._rt._project_dir.exists():
+            cmd.extend(["--add-dir", str(self._rt._project_dir)])
+
+        mcp_config = json.dumps({
+            "mcpServers": {
+                "agentos-comms": {
+                    "command": sys.executable,
+                    "args": [
+                        "-m", "agentos.comms.mcp_server",
+                        "--workspace", str(workspace),
+                        "--agent-id", agent_id,
+                    ],
+                    "env": {"AGENTOS_AGENT_ID": agent_id},
+                }
+            }
+        })
+        cmd.extend(["--mcp-config", mcp_config, "-p", prompt])
+        return cmd
+
     def _spawn_agent(self, agent_id: str, task: BacklogTask) -> None:
-        """Launch a Claude Code instance for a task. Non-blocking."""
+        """Wake an agent for a task. Uses --continue for subsequent turns."""
         workspace = self._rt._workspace_dir
         if workspace is None:
+            return
+
+        agent = self._agents.get(agent_id)
+        if not agent:
+            return
+        if agent.is_busy:
             return
 
         ensure_agent_dir(workspace, agent_id)
@@ -190,48 +278,32 @@ class WorkspaceSupervisor:
             ctx = self._rt._curator.curate(task)
             context_section = self._rt._curator.render_prompt_section(ctx)
 
-        # Build agent prompt
-        prompt = (
-            f"You are {agent_id}. Your task:\n\n"
-            f"## {task.title}\n{task.description}\n"
-            f"\n{context_section}\n"
-            f"\n## Team Communication\n"
-            f"You have MCP tools: read_board, post_to_board, check_messages, "
-            f"send_message, report_progress.\n"
-            f"IMPORTANT:\n"
-            f"- Call read_board at the START and every few steps — the human may post directions\n"
-            f"- Call check_messages periodically — teammates or the human may message you\n"
-            f"- Post findings to the board as you discover them (not just at the end)\n"
-            f"- If the human gives a directive on the board, acknowledge it and adjust\n"
-        )
+        # Build prompt — first turn includes role setup, subsequent turns are shorter
+        if not agent.session_started:
+            prompt = (
+                f"You are {agent_id}, a team member in an AgentOS workspace.\n"
+                f"You are part of a team working on: {self._rt.config.goal.strip()[:200]}\n\n"
+                f"## Team Communication\n"
+                f"You have MCP tools: read_board, post_to_board, check_messages, "
+                f"send_message, report_progress.\n"
+                f"IMPORTANT:\n"
+                f"- Call read_board at the START and every few steps\n"
+                f"- Call check_messages FREQUENTLY — the human may message you\n"
+                f"- When you receive a message from the human, you MUST reply using send_message\n"
+                f"- Post findings to the board as you discover them\n\n"
+                f"## Your Task\n"
+                f"### {task.title}\n{task.description}\n"
+                f"\n{context_section}"
+            )
+        else:
+            prompt = (
+                f"New task assigned to you:\n\n"
+                f"### {task.title}\n{task.description}\n"
+                f"\n{context_section}\n\n"
+                f"Remember to check_messages and read_board before starting."
+            )
 
-        # Build command
-        cmd = [
-            "claude", "--print",
-            "--output-format", "stream-json",
-            "--verbose",
-            "--max-turns", "15",
-            "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash",
-            "--disallowedTools", "Agent,TodoWrite,ToolSearch",
-        ]
-
-        if self._rt._project_dir and self._rt._project_dir.exists():
-            cmd.extend(["--add-dir", str(self._rt._project_dir)])
-
-        mcp_config = json.dumps({
-            "mcpServers": {
-                "agentos-comms": {
-                    "command": sys.executable,
-                    "args": [
-                        "-m", "agentos.comms.mcp_server",
-                        "--workspace", str(workspace),
-                        "--agent-id", agent_id,
-                    ],
-                    "env": {"AGENTOS_AGENT_ID": agent_id},
-                }
-            }
-        })
-        cmd.extend(["--mcp-config", mcp_config, "-p", prompt])
+        cmd = self._build_agent_cmd(agent_id, prompt)
 
         # Snapshot files before execution (for detecting new files)
         files_before = set()
@@ -251,9 +323,15 @@ class WorkspaceSupervisor:
         )
         self._active[agent_id] = info
         self._procs[agent_id] = proc
-        # Store metadata for later
         info._files_before = files_before  # type: ignore[attr-defined]
         info._launch_mono = time.monotonic()  # type: ignore[attr-defined]
+
+        # Update persistent agent state
+        agent.state = "working"
+        agent.current_task_id = task.task_id
+        agent.current_proc = proc
+        agent.session_started = True
+        agent.launch_time = time.monotonic()
 
         # Monitor stdout in background thread (for progress display)
         t = threading.Thread(
@@ -297,6 +375,24 @@ class WorkspaceSupervisor:
         """Handle a completed agent — parse output, verify, route."""
         workspace = self._rt._workspace_dir
         task_id = info.task_id
+        is_dm_response = task_id == "dm-response"
+
+        # Set persistent agent to IDLE first
+        agent = self._agents.get(info.agent_id)
+        if agent:
+            agent.state = "idle"
+            agent.current_task_id = None
+            agent.current_proc = None
+
+        # DM responses don't have a task to complete
+        if is_dm_response:
+            self._rt.board.update_agent_status(AgentStatus(
+                agent_id=info.agent_id, agent_name=info.agent_id, state="idle",
+            ))
+            self._emit_event("agent_completed", {
+                "agent": info.agent_id, "task": "responded to messages", "files": [],
+            })
+            return
 
         # Detect new files
         files_before = getattr(info, "_files_before", set())
@@ -333,7 +429,6 @@ class WorkspaceSupervisor:
             verification = self._rt._verifier.verify(
                 self._rt.backlog.get_task(task_id), output,
             )
-            # Auto-accept (coordinator can still review later)
             self._rt.backlog.start_review(task_id, "auto-review")
             self._rt.backlog.accept_review(task_id, "accepted")
         except ValueError as exc:
@@ -348,19 +443,25 @@ class WorkspaceSupervisor:
             )
 
         # Update board
+        task_title = "unknown"
+        try:
+            task_title = self._rt.backlog.get_task(task_id).title
+        except ValueError:
+            pass
+
         self._rt.board.update_agent_status(AgentStatus(
             agent_id=info.agent_id, agent_name=info.agent_id, state="idle",
         ))
         self._rt.board.post(BoardPost(
             section=BoardSection.POST,
             author_type="agent", author_id=info.agent_id,
-            content=f"Completed: {self._rt.backlog.get_task(task_id).title}",
+            content=f"Completed: {task_title}",
             speech_act=SpeechAct.INFORM,
         ))
 
         self._emit_event("agent_completed", {
             "agent": info.agent_id,
-            "task": self._rt.backlog.get_task(task_id).title,
+            "task": task_title,
             "files": new_files,
         })
 
@@ -413,22 +514,32 @@ class WorkspaceSupervisor:
         self._emit_event("human_command", {"action": action})
 
         if action == "post_to_board":
+            content = payload.get("content", "")
             self._rt.board.post(BoardPost(
                 section=BoardSection(payload.get("section", "post")),
                 author_type="human", author_id="human",
-                content=payload.get("content", ""),
+                content=content,
                 speech_act=SpeechAct(payload.get("speech_act", "directive")),
             ))
+            # Trigger coordinator response to the human's message
+            if content:
+                self._schedule_coordinator_response(content)
 
         elif action == "send_message":
             to = payload.get("to", "")
             content = payload.get("content", "")
             if to and content:
-                write_agent_inbox(self._rt._workspace_dir, to, [{
+                msg = {
                     "from": "human", "content": content,
                     "speech_act": "directive",
                     "timestamp": _utc_now_iso(),
-                }])
+                }
+                # Write to inbox file (for check_messages MCP tool)
+                write_agent_inbox(self._rt._workspace_dir, to, [msg])
+                # Also queue for persistent agent wake-up
+                agent = self._agents.get(to)
+                if agent:
+                    agent.pending_messages.append(msg)
 
         elif action == "claim_task":
             task_id = payload.get("task_id", "")
@@ -549,6 +660,187 @@ class WorkspaceSupervisor:
         return None
 
     # ------------------------------------------------------------------
+    # Wake idle agents for pending messages
+    # ------------------------------------------------------------------
+
+    def _wake_agents_for_messages(self) -> None:
+        """Wake agents that have pending DMs — idle agents get woken,
+        busy agents get interrupted and resumed with the message."""
+        for agent_id, agent in self._agents.items():
+            if not agent.pending_messages:
+                continue
+
+            if agent.state == "idle":
+                self._wake_for_messages(agent)
+            elif agent.state == "working" and agent.current_proc:
+                self._interrupt_for_messages(agent)
+
+    def _wake_for_messages(self, agent: PersistentAgent) -> None:
+        """Resume an idle agent's session to handle DMs."""
+        workspace = self._rt._workspace_dir
+        if workspace is None:
+            return
+
+        messages = list(agent.pending_messages)
+        agent.pending_messages.clear()
+
+        # Build prompt with the messages
+        msg_text = "\n".join(
+            f"From {m.get('from', '?')}: {m.get('content', '')}"
+            for m in messages
+        )
+        prompt = (
+            f"You have messages from the team. Read and respond to each one "
+            f"using send_message.\n\n{msg_text}\n\n"
+            f"After responding, call read_board to see if there's anything else to do."
+        )
+
+        # DM responses: fewer turns, lighter model
+        cmd = self._build_agent_cmd(agent.agent_id, prompt, max_turns=3, model="sonnet")
+
+        # Snapshot files
+        files_before = set()
+        for f in workspace.rglob("*"):
+            if f.is_file() and ".agentos" not in str(f):
+                files_before.add(str(f))
+
+        proc = subprocess.Popen(
+            cmd, cwd=str(workspace),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        info = AgentProcessState(
+            agent_id=agent.agent_id, task_id="dm-response",
+            pid=proc.pid, launched_at=_utc_now_iso(),
+        )
+        self._active[agent.agent_id] = info
+        self._procs[agent.agent_id] = proc
+        info._files_before = files_before  # type: ignore[attr-defined]
+        info._launch_mono = time.monotonic()  # type: ignore[attr-defined]
+
+        agent.state = "responding"
+        agent.current_proc = proc
+
+        # Monitor stdout
+        t = threading.Thread(
+            target=self._monitor_stdout, args=(agent.agent_id, proc),
+            daemon=True,
+        )
+        t.start()
+        self._stdout_threads[agent.agent_id] = t
+
+        threading.Thread(
+            target=lambda: [None for _ in proc.stderr],
+            daemon=True,
+        ).start()
+
+        self._rt.board.update_agent_status(AgentStatus(
+            agent_id=agent.agent_id, agent_name=agent.agent_id,
+            state="running", current_task="responding to messages",
+        ))
+
+        self._emit_event("agent_spawned", {
+            "agent": agent.agent_id, "task": "responding to messages",
+        })
+
+    def _interrupt_for_messages(self, agent: PersistentAgent) -> None:
+        """Interrupt a working agent to handle DMs, then resume their task.
+
+        1. Kill the current process (work-in-progress is saved in session)
+        2. Resume with --continue: "You have messages. Respond, then continue your task."
+        3. Agent responds to DMs and picks up where it left off.
+        """
+        workspace = self._rt._workspace_dir
+        if workspace is None:
+            return
+
+        # Kill current process
+        if agent.current_proc and agent.current_proc.poll() is None:
+            agent.current_proc.terminate()
+            try:
+                agent.current_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                agent.current_proc.kill()
+                agent.current_proc.wait()
+
+        # Clean up tracking
+        self._active.pop(agent.agent_id, None)
+        self._procs.pop(agent.agent_id, None)
+        self._stdout_threads.pop(agent.agent_id, None)
+
+        # Build messages text
+        messages = list(agent.pending_messages)
+        agent.pending_messages.clear()
+
+        msg_text = "\n".join(
+            f"From {m.get('from', '?')}: {m.get('content', '')}"
+            for m in messages
+        )
+
+        # Get current task info for resume context
+        task_title = ""
+        if agent.current_task_id:
+            try:
+                task = self._rt.backlog.get_task(agent.current_task_id)
+                task_title = task.title
+            except ValueError:
+                pass
+
+        prompt = (
+            f"IMPORTANT: You have urgent messages from the team. "
+            f"Stop what you're doing and respond to them FIRST using send_message.\n\n"
+            f"## Messages\n{msg_text}\n\n"
+            f"After responding, continue working on your current task"
+            + (f": {task_title}" if task_title else "") + ".\n"
+            f"Call read_board to check for any other updates."
+        )
+
+        # Interrupt: respond then resume — more turns needed since it continues the task
+        cmd = self._build_agent_cmd(agent.agent_id, prompt, max_turns=10)
+
+        # Snapshot files
+        files_before = set()
+        for f in workspace.rglob("*"):
+            if f.is_file() and ".agentos" not in str(f):
+                files_before.add(str(f))
+
+        proc = subprocess.Popen(
+            cmd, cwd=str(workspace),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        info = AgentProcessState(
+            agent_id=agent.agent_id,
+            task_id=agent.current_task_id or "dm-response",
+            pid=proc.pid, launched_at=_utc_now_iso(),
+        )
+        self._active[agent.agent_id] = info
+        self._procs[agent.agent_id] = proc
+        info._files_before = files_before  # type: ignore[attr-defined]
+        info._launch_mono = time.monotonic()  # type: ignore[attr-defined]
+
+        agent.state = "working"  # Still working, just handling DMs first
+        agent.current_proc = proc
+
+        # Monitor stdout
+        t = threading.Thread(
+            target=self._monitor_stdout, args=(agent.agent_id, proc),
+            daemon=True,
+        )
+        t.start()
+        self._stdout_threads[agent.agent_id] = t
+
+        threading.Thread(
+            target=lambda: [None for _ in proc.stderr],
+            daemon=True,
+        ).start()
+
+        self._emit_event("agent_activity", {
+            "agent": agent.agent_id,
+            "activity": "📨 Interrupted — responding to messages",
+        })
+
+    # ------------------------------------------------------------------
     # Stall detection
     # ------------------------------------------------------------------
 
@@ -622,8 +914,97 @@ class WorkspaceSupervisor:
 
     def _invoke_coordinator_sync(self, reason: str) -> None:
         """Synchronous coordinator invocation (for human-triggered replan)."""
-        # Schedule it — will run on next tick cycle
         self._pending_coordinator_reason = reason
+
+    # ------------------------------------------------------------------
+    # Coordinator conversation (responds to human messages)
+    # ------------------------------------------------------------------
+
+    def _schedule_coordinator_response(self, human_message: str) -> None:
+        """Queue a human message for coordinator response on next tick."""
+        self._pending_human_messages.append(human_message)
+
+    def _process_coordinator_responses(self) -> None:
+        """If there are pending human messages, invoke coordinator to respond."""
+        if not self._pending_human_messages:
+            return
+
+        # Batch all pending messages
+        messages = list(self._pending_human_messages)
+        self._pending_human_messages.clear()
+
+        # Cooldown check
+        now = time.monotonic()
+        if now - self._last_coordinator_time < self._config.coordinator_cooldown:
+            return
+        self._last_coordinator_time = now
+
+        # Run in background thread to not block the tick
+        threading.Thread(
+            target=self._run_coordinator_response,
+            args=(messages,),
+            daemon=True,
+        ).start()
+
+    def _run_coordinator_response(self, human_messages: list[str]) -> None:
+        """Invoke a short coordinator session to respond to the human."""
+        workspace = self._rt._workspace_dir
+        if workspace is None:
+            return
+
+        # Build context
+        board_compact = self._rt.board.render_compact(max_tokens=300)
+        tasks = self._rt.backlog.get_all_tasks()
+        task_summary = "\n".join(
+            f"- [{t.status}] {t.title}" + (f" → {t.assigned_to}" if t.assigned_to else "")
+            for t in tasks
+        )
+        active_agents = ", ".join(self._active.keys()) if self._active else "none"
+        human_text = "\n".join(f"Human: {m}" for m in human_messages)
+
+        prompt = (
+            f"You are the workspace coordinator. The human lead just sent a message. "
+            f"Respond conversationally — acknowledge what they said, answer any questions, "
+            f"and explain what the team is doing.\n\n"
+            f"## Human's Message\n{human_text}\n\n"
+            f"## Current State\n"
+            f"Active agents: {active_agents}\n"
+            f"Tasks:\n{task_summary}\n\n"
+            f"## Board\n{board_compact}\n\n"
+            f"## Instructions\n"
+            f"Respond in 2-4 sentences. Be conversational, not formal. "
+            f"If the human asked a question, answer it. "
+            f"If they gave a directive, acknowledge it and explain how you'll act on it. "
+            f"If they're just chatting, respond naturally.\n\n"
+            f"Respond with ONLY your message text — no JSON, no markdown headers, just your reply."
+        )
+
+        try:
+            cmd = [
+                "claude", "--print",
+                "--output-format", "text",
+                "--max-turns", "1",
+                "--model", "sonnet",
+                "-p", prompt,
+            ]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=60,
+                cwd=str(workspace),
+            )
+            response = result.stdout.strip()
+            if response:
+                # Post coordinator response to board
+                self._rt.board.post(BoardPost(
+                    section=BoardSection.POST,
+                    author_type="agent", author_id="coordinator",
+                    content=response,
+                    speech_act=SpeechAct.INFORM,
+                ))
+                self._emit_event("board_post", {
+                    "author": "coordinator", "content": response,
+                })
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logger.warning("Coordinator response failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Shared state writing
@@ -657,7 +1038,7 @@ class WorkspaceSupervisor:
     # ------------------------------------------------------------------
 
     def _monitor_stdout(self, agent_id: str, proc: subprocess.Popen) -> None:
-        """Read agent stdout in background, emit events for tool calls."""
+        """Read agent stdout in background, emit events for tool calls and usage."""
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -677,6 +1058,18 @@ class WorkspaceSupervisor:
                             self._emit_event("agent_activity", {
                                 "agent": agent_id, "activity": desc,
                             })
+
+            elif event.get("type") == "result":
+                # Capture token usage from the result event
+                usage = event.get("usage", event.get("result", {}).get("usage", {}))
+                if usage:
+                    self._emit_event("agent_usage", {
+                        "agent": agent_id,
+                        "input_tokens": usage.get("input_tokens", 0),
+                        "output_tokens": usage.get("output_tokens", 0),
+                        "cache_read": usage.get("cache_read_input_tokens", 0),
+                        "cache_write": usage.get("cache_creation_input_tokens", 0),
+                    })
 
     @staticmethod
     def _describe_tool_call(name: str, inp: dict) -> str:

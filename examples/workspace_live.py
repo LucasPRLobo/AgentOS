@@ -150,6 +150,7 @@ class WorkspaceTUI(App):
         self._views = ["home", "board", "tasks"]
         self._chat_history: dict[str, list[str]] = {}
         self._board_posts: list[dict] = []
+        self._total_tokens: int = 0  # Track total token usage
 
     def compose(self) -> ComposeResult:
         yield Static("", id="header")
@@ -474,16 +475,23 @@ class WorkspaceTUI(App):
                 return
             if content.startswith("PINNED:") or content.startswith("Team:"):
                 return
-            content = content[:120]
             self._board_posts.append(e)
-            # Board view: show the post
+
+            # Board view: show full post
             if author == "human":
                 self._add_to_view("board", f"[cyan bold]you[/]: {content}")
             else:
                 self._add_to_view("board", f"[magenta]{author}[/]: {content}")
-            # Home view: show a COMPACT one-line notification (not the full post)
-            short = content[:60] + "…" if len(content) > 60 else content
-            self._add_to_view("home", f"  [dim]📋 {author}:[/] {short}")
+
+            # Home view: coordinator and human messages show FULL, others compact
+            if author == "coordinator":
+                self._add_to_view("home", f"[yellow]coordinator[/]: {content}")
+            elif author == "human":
+                pass  # Already shown when the user typed it
+            else:
+                # Other agents' board posts: compact one-liner
+                short = content[:80] + "…" if len(content) > 80 else content
+                self._add_to_view("home", f"  [dim]📋 {author}:[/] {short}")
 
         elif t == "agent_spawned":
             agent = e.get("agent", "?")
@@ -515,9 +523,12 @@ class WorkspaceTUI(App):
 
         elif t == "message_to_human":
             sender = e.get("from", "?")
-            content = e.get("content", "")[:120]
-            # Show in home AND in the sender's agent view
-            self._add_to_view("home", f"  [yellow]💬 {sender}[/]: {content}")
+            content = e.get("content", "")
+            # Full message in the sender's agent chat view
+            self._add_to_view(f"agent:{sender}", f"[yellow]{sender}[/]: {content}")
+            # Compact notification on home
+            short = content[:80] + "…" if len(content) > 80 else content
+            self._add_to_view("home", f"  [yellow]💬 {sender}[/]: {short}")
             self._add_to_view(f"agent:{sender}", f"[yellow]{sender}[/]: {content}")
 
         elif t == "workspace_completed":
@@ -526,6 +537,11 @@ class WorkspaceTUI(App):
         elif t == "plan_created":
             count = e.get("task_count", 0)
             self._add_to_view("home", f"  [yellow]coordinator[/]: Plan ready — {count} tasks created.")
+
+        elif t == "agent_usage":
+            inp = e.get("input_tokens", 0)
+            out = e.get("output_tokens", 0)
+            self._total_tokens += inp + out
 
         elif t == "status":
             verb = e.get("verb", "")
@@ -588,11 +604,20 @@ class WorkspaceTUI(App):
         icon = "[green]●[/]" if status == "active" else "[yellow]●[/]"
         n_active = len(getattr(self.supervisor, '_active', {})) if self.supervisor else 0
 
+        tokens_str = ""
+        if self._total_tokens > 0:
+            if self._total_tokens > 1_000_000:
+                tokens_str = f" │ {self._total_tokens / 1_000_000:.1f}M tokens"
+            elif self._total_tokens > 1_000:
+                tokens_str = f" │ {self._total_tokens / 1_000:.0f}K tokens"
+            else:
+                tokens_str = f" │ {self._total_tokens} tokens"
+
         try:
             self.query_one("#header").update(
                 f" [bold green]AgentOS[/] │ {self.runtime.config.name} │ "
                 f"{icon} {status.upper()} │ {done}/{len(tasks)} tasks │ "
-                f"{n_active} agents running"
+                f"{n_active} running{tokens_str}"
             )
         except Exception:
             pass
