@@ -184,6 +184,7 @@ def run_decomposition(
     workflow_id: str,
     project_dir: Path | None = None,
     status_fn=None,
+    repo_map: str = "",
 ) -> list[BacklogTask]:
     """Launch coordinator to decompose the goal into tasks.
 
@@ -198,6 +199,15 @@ def run_decomposition(
     criteria = "\n".join(f"- {c}" for c in config.acceptance_criteria) or "None specified"
     docs = "\n".join(f"- {d}" for d in config.documents) or "None"
 
+    repo_section = ""
+    if repo_map:
+        repo_section = (
+            f"\n## Codebase Structure\n"
+            f"The map below shows the project. You already have the full structure —\n"
+            f"do NOT read files to understand the codebase. Use this map.\n\n"
+            f"{repo_map}\n"
+        )
+
     prompt = f"""You are the project coordinator. Your job is to decompose a goal into concrete, actionable tasks for your team. You do NOT execute tasks yourself — you plan and delegate.
 
 ## Goal
@@ -211,13 +221,13 @@ def run_decomposition(
 
 ## Team
 {chr(10).join(team_lines) or 'No team members yet.'}
-
+{repo_section}
 ## Documents Available
 {docs}
 
 ## Instructions
 1. Read the board for project context
-2. Analyze the goal and team capabilities
+2. Use the codebase map above — do NOT read files to explore the project
 3. Decompose into specific, non-overlapping tasks
 4. Write your task decomposition to `{_OUTPUT_DIR}/tasks.json` with this exact format:
 

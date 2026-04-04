@@ -106,6 +106,15 @@ class WorkspaceSupervisor:
             if p.type == "agent":
                 self._agents[p.name] = PersistentAgent(p.name, wf_id)
 
+        # Repo map — generated once, shared across all agents
+        self._repo_map: str = ""
+        if runtime._project_dir and runtime._project_dir.exists():
+            from agentos.workspace.repo_map import RepoMapGenerator
+            gen = RepoMapGenerator(runtime._project_dir)
+            self._repo_map = gen.generate()
+            logger.info("Repo map loaded: %d chars (~%d tokens)",
+                        len(self._repo_map), len(self._repo_map) // 4)
+
         # Callbacks (set by CLI/dashboard)
         self._on_event = None       # fn(event_dict) — for live display
         self._on_status = None      # fn(message, verb) — for spinner
@@ -126,6 +135,13 @@ class WorkspaceSupervisor:
         """Run the supervisor until workspace completes or is paused."""
         self._rt.start()
         self._emit_event("workspace_started", {"name": self._rt.config.name})
+
+        # Write workspace CLAUDE.md (auto-loaded by Claude Code agents)
+        if self._rt._workspace_dir and self._repo_map:
+            from agentos.workspace.repo_map import write_workspace_claude_md
+            write_workspace_claude_md(
+                self._rt._workspace_dir, self._rt.config, self._repo_map,
+            )
 
         # Initial decomposition if no tasks
         if not self._rt.backlog.get_all_tasks():
@@ -278,11 +294,20 @@ class WorkspaceSupervisor:
             ctx = self._rt._curator.curate(task)
             context_section = self._rt._curator.render_prompt_section(ctx)
 
-        # Build prompt — first turn includes role setup, subsequent turns are shorter
+        # Build prompt — first turn includes role setup + repo map, subsequent turns are shorter
         if not agent.session_started:
+            repo_section = ""
+            if self._repo_map:
+                repo_section = (
+                    f"## Codebase Overview\n"
+                    f"The map below shows the project structure and key APIs.\n"
+                    f"Use it to know WHERE things are. Only read files you actually need.\n\n"
+                    f"{self._repo_map}\n"
+                )
             prompt = (
                 f"You are {agent_id}, a team member in an AgentOS workspace.\n"
                 f"You are part of a team working on: {self._rt.config.goal.strip()[:200]}\n\n"
+                f"{repo_section}"
                 f"## Team Communication\n"
                 f"You have MCP tools: read_board, post_to_board, check_messages, "
                 f"send_message, report_progress.\n"
@@ -290,7 +315,10 @@ class WorkspaceSupervisor:
                 f"- Call read_board at the START and every few steps\n"
                 f"- Call check_messages FREQUENTLY — the human may message you\n"
                 f"- When you receive a message from the human, you MUST reply using send_message\n"
-                f"- Post findings to the board as you discover them\n\n"
+                f"- Post findings to the board as you discover them\n"
+                f"- Do NOT explore the codebase blindly — the map above shows what exists\n"
+                f"- Only Read files when you need specific implementation details\n"
+                f"- Keep file reads under 10 for this task\n\n"
                 f"## Your Task\n"
                 f"### {task.title}\n{task.description}\n"
                 f"\n{context_section}"
@@ -910,6 +938,7 @@ class WorkspaceSupervisor:
             workflow_id=self._rt._workflow_id,
             project_dir=self._rt._project_dir,
             status_fn=self._on_status,
+            repo_map=self._repo_map,
         )
 
     def _invoke_coordinator_sync(self, reason: str) -> None:
