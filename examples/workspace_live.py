@@ -135,11 +135,15 @@ class WorkspaceTUI(App):
     current_view: str = "home"
     agent_index: int = 0
 
-    def __init__(self, yaml_path: Path, mock: bool = False, skip_coordinator: bool = False):
+    def __init__(self, yaml_path: Path | None = None, mock: bool = False,
+                 skip_coordinator: bool = False):
         super().__init__()
         self.yaml_path = yaml_path
         self.mock = mock
         self.skip_coordinator = skip_coordinator
+        self.blank_mode = yaml_path is None  # No YAML = blank workspace
+        self._setup_messages: list[str] = []  # Setup conversation history
+        self._setup_started = False
         self.runtime = None
         self.supervisor = None
         self.workspace = None
@@ -174,14 +178,29 @@ class WorkspaceTUI(App):
         yield Footer()
 
     async def on_mount(self) -> None:
-        if not self.mock:
+        if not self.mock and not self.blank_mode:
             try:
                 subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
             except FileNotFoundError:
                 self._chat_write("[red]ERROR: claude CLI not found[/]")
                 return
 
+        # Blank mode: start with just the coordinator conversation
+        if self.blank_mode:
+            self._tmpdir = Path(tempfile.mkdtemp(prefix="agentos_live_"))
+            self.workspace = self._tmpdir / "workspace"
+            self.workspace.mkdir()
+            self.query_one("#header").update(
+                " [bold green]AgentOS[/] │ New Workspace"
+            )
+            self._add_to_view("home", "[yellow]coordinator[/]: Hi! What would you like to work on?")
+            self._add_to_view("home", "")
+            self._add_to_view("home", "[dim]Describe your project and I'll suggest a team.[/]")
+            self.set_interval(1.0, self._refresh)
+            return
+
         tmpdir = Path(tempfile.mkdtemp(prefix="agentos_live_"))
+        self._tmpdir = tmpdir
         self.workspace = tmpdir / "workspace"
         self.workspace.mkdir()
 
@@ -189,7 +208,6 @@ class WorkspaceTUI(App):
         from agentos.kernel.event_log import SQLiteEventLog
         from agentos.kernel.seq import SeqCounter
         from agentos.workspace.runtime import WorkspaceRuntime
-        from agentos.workspace.schemas import BacklogTask
 
         config = load_workspace_config(self.yaml_path)
         event_log = SQLiteEventLog(str(tmpdir / "workspace.db"))
@@ -392,6 +410,202 @@ class WorkspaceTUI(App):
                 write_board_file(self.workspace, board_data)
 
             loop.run_until_complete(_asyncio.sleep(2.0))
+
+    # ── Blank workspace setup ────────────────────────────────────
+
+    @work(thread=True)
+    def _handle_setup_message(self, text: str) -> None:
+        """Handle a message during blank workspace setup.
+
+        The setup coordinator is a full Claude Code session with tool access.
+        It can read files, search the web, explore the codebase — just like
+        when you start a conversation with Claude Code directly.
+        """
+        self._setup_messages.append(text)
+        self._add_to_view("home", f"[cyan bold]you[/]: {text}")
+
+        all_messages = "\n".join(f"Human: {m}" for m in self._setup_messages)
+
+        prompt = (
+            f"You are the AgentOS setup coordinator. Help the user define their project.\n"
+            f"You have full tool access — read files, search the web, explore the codebase.\n\n"
+            f"Conversation so far:\n{all_messages}\n\n"
+            f"## Your process:\n"
+            f"1. Explore the codebase/web if needed to understand the project\n"
+            f"2. Ask clarifying questions if you need more info\n"
+            f"3. When ready, PRESENT the team proposal clearly in your response:\n"
+            f"   - List each agent: name, role, what they'll do\n"
+            f"   - Suggest a budget\n"
+            f"   - Ask the user to approve or adjust\n"
+            f"4. ONLY write `_setup_output/config.json` AFTER the user says yes/approved\n\n"
+            f"The config format when writing:\n"
+            f'{{"ready": true, "name": "Project Name", "goal": "...", '
+            f'"team": [{{"name": "agent-name", "specialization": "what they do"}}], '
+            f'"budget_usd": 8.0}}\n\n'
+            f"IMPORTANT: Show the plan to the user FIRST. Do NOT write ready:true until they approve.\n"
+            f"Respond conversationally — explain your thinking."
+        )
+
+        try:
+            cmd = [
+                "claude", "--print",
+                "--output-format", "stream-json",
+                "--verbose",
+                "--max-turns", "10",
+                "--model", "sonnet",
+                "--permission-mode", "bypassPermissions",
+                "--name", "agentos-setup",
+            ]
+
+            # Give access to the project directory
+            project_dir = Path.cwd()
+            if (project_dir / "agentos").is_dir():
+                cmd.extend(["--add-dir", str(project_dir)])
+            elif (project_dir.parent / "agentos").is_dir():
+                cmd.extend(["--add-dir", str(project_dir.parent)])
+
+            if self._setup_started:
+                cmd.append("--continue")
+
+            cmd.extend(["-p", prompt])
+
+            # Ensure output dir exists
+            if self.workspace:
+                (self.workspace / "_setup_output").mkdir(exist_ok=True)
+
+            # Stream the response — show tool calls live
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(self.workspace) if self.workspace else None,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+
+            import json as _json
+            response_text = ""
+
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+
+                if event.get("type") == "assistant":
+                    for block in event.get("message", {}).get("content", []):
+                        if block.get("type") == "text":
+                            response_text = block.get("text", "")
+                        elif block.get("type") == "tool_use":
+                            name = block.get("name", "")
+                            inp = block.get("input", {})
+                            desc = self._describe_setup_tool(name, inp)
+                            if desc:
+                                self._activity_write(f"[dim]coordinator: {desc}[/]")
+
+            # Drain stderr
+            proc.stderr.read()
+            proc.wait()
+            self._setup_started = True
+
+            # Show the response
+            if response_text:
+                self._add_to_view("home", f"[yellow]coordinator[/]: {response_text}")
+
+            # Check if config was written to file
+            config_path = self.workspace / "_setup_output" / "config.json" if self.workspace else None
+            if config_path and config_path.exists():
+                try:
+                    config_data = _json.loads(config_path.read_text())
+                    if config_data.get("ready"):
+                        self._add_to_view("home", "")
+                        self._add_to_view("home", "[green]Setting up workspace...[/]")
+                        self._initialize_from_config(config_data)
+                except _json.JSONDecodeError:
+                    pass
+
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            self._add_to_view("home", f"[red]Setup failed: {exc}[/]")
+
+    @staticmethod
+    def _describe_setup_tool(name: str, inp: dict) -> str:
+        """Human-readable tool call for setup coordinator."""
+        clean = name.replace("mcp__agentos-comms__", "")
+        def _short(p: str) -> str:
+            parts = p.replace("\\", "/").split("/")
+            return "/".join(parts[-2:]) if len(parts) > 2 else p
+        if name == "Read":
+            return f"📖 Reading {_short(inp.get('file_path', inp.get('path', '?')))}"
+        if name == "Glob":
+            return f"🔍 Finding: {inp.get('pattern', '?')}"
+        if name == "Grep":
+            return f"🔎 Searching: {inp.get('pattern', '?')[:40]}"
+        if name == "Bash":
+            return f"⚡ {inp.get('command', '?')[:60]}"
+        if name in ("WebSearch", "WebFetch"):
+            return f"🌐 {name}: {inp.get('query', inp.get('url', '?'))[:50]}"
+        if name == "Write":
+            return f"✏️  Writing {_short(inp.get('file_path', '?'))}"
+        if name:
+            return f"🔧 {name}"
+        return ""
+
+    def _initialize_from_config(self, config_dict: dict) -> None:
+        """Create workspace from the coordinator's proposed config."""
+        from agentos.kernel.event_log import SQLiteEventLog
+        from agentos.kernel.seq import SeqCounter
+        from agentos.schemas.budget import BudgetSpec
+        from agentos.workspace.runtime import WorkspaceRuntime
+        from agentos.workspace.schemas import WorkspaceConfig, WorkspaceParticipant
+
+        team = []
+        for t in config_dict.get("team", []):
+            team.append(WorkspaceParticipant(
+                name=t.get("name", "agent"),
+                type=t.get("type", "agent"),
+                specialization=t.get("specialization", ""),
+            ))
+        # Always add the human
+        if not any(t.get("type") == "human" for t in config_dict.get("team", [])):
+            team.append(WorkspaceParticipant(name="human", type="human"))
+
+        budget_usd = config_dict.get("budget_usd", config_dict.get("budget", {}).get("max_cost_usd", 8.0))
+        config = WorkspaceConfig(
+            name=config_dict.get("name", "New Workspace"),
+            goal=config_dict.get("goal", ""),
+            team=team,
+            budget=BudgetSpec(max_cost_usd=float(budget_usd)),
+        )
+
+        event_log = SQLiteEventLog(str(self._tmpdir / "workspace.db"))
+        seq = SeqCounter()
+        wf_id = f"ws-{config.name.lower().replace(' ', '-')[:30]}"
+
+        # Detect project dir
+        project_dir = Path.cwd()
+        if (project_dir / "agentos").is_dir():
+            pass
+        elif (project_dir.parent / "agentos").is_dir():
+            project_dir = project_dir.parent
+
+        self.runtime = WorkspaceRuntime(config, event_log, seq, wf_id, self.workspace,
+                                         project_dir=project_dir)
+
+        self._agent_ids = [p.name for p in config.team if p.type == "agent"]
+        self._views = ["home"] + [f"agent:{a}" for a in self._agent_ids] + ["board", "tasks"]
+
+        self.query_one("#header").update(
+            f" [bold green]AgentOS[/] │ {config.name}"
+        )
+
+        self._add_to_view("home", f"[dim]Name: {config.name}[/]")
+        self._add_to_view("home", f"[dim]Team: {', '.join(p.name for p in config.team)}[/]")
+        self._add_to_view("home", "")
+        self._add_to_view("home", "[yellow]coordinator[/]: Workspace ready. Launching agents...")
+
+        # Switch from blank mode to active mode
+        self.blank_mode = False
+        self.run_supervisor()
 
     # ── Message routing ──────────────────────────────────────────
 
@@ -652,6 +866,11 @@ class WorkspaceTUI(App):
             self._handle_message(line)
 
     def _handle_message(self, text: str) -> None:
+        # Blank mode: setup conversation
+        if self.blank_mode and not self.runtime:
+            self._handle_setup_message(text)
+            return
+
         if not self.workspace:
             return
         from agentos.comms.comms_state import write_human_command
@@ -906,11 +1125,10 @@ def main():
     skip_coord = "--skip-coordinator" in flags
 
     if not args:
-        print("Usage: python examples/workspace_live.py <workspace.yaml> [flags]")
-        print("")
-        print("  --mock               Simulate agents (zero tokens)")
-        print("  --skip-coordinator   Pre-load tasks, run real agents (saves coordinator tokens)")
-        sys.exit(1)
+        # Blank workspace: start with just the coordinator
+        app = WorkspaceTUI(yaml_path=None)
+        app.run()
+        return
 
     yaml_path = Path(args[0])
     if not yaml_path.exists():

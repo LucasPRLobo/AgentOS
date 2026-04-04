@@ -1,0 +1,441 @@
+/* ═══════════════════════════════════════════════════════════════════
+   AgentOS Design System — Design Tokens
+
+   Warm minimalism. Approachable. Alive.
+
+   Font: Plus Jakarta Sans (geometric, warm, modern)
+   Base unit: 4px
+   Color system: Semantic tokens referencing primitives
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Color Primitives ──────────────────────────────────────────── */
+:root {
+  /* Indigo (Primary brand) */
+  --color-indigo-25:  #f5f6ff;
+  --color-indigo-50:  #ebeeff;
+  --color-indigo-100: #d4daff;
+  --color-indigo-200: #adb8ff;
+  --color-indigo-300: #8592ff;
+  --color-indigo-400: #6370f0;
+  --color-indigo-500: #4f5bd5;
+  --color-indigo-600: #3d48b8;
+  --color-indigo-700: #2e3699;
+  --color-indigo-800: #21277a;
+  --color-indigo-900: #161a5c;
+
+  /* Slate (Neutral) */
+  --color-slate-0:   #ffffff;
+  --color-slate-25:  #fafbfc;
+  --color-slate-50:  #f4f5f7;
+  --color-slate-100: #e8eaef;
+  --color-slate-200: #d1d5de;
+  --color-slate-300: #b0b7c5;
+  --color-slate-400: #8b94a7;
+  --color-slate-500: #6b7589;
+  --color-slate-600: #515b6e;
+  --color-slate-700: #3b4354;
+  --color-slate-800: #272d3a;
+  --color-slate-900: #151821;
+  --color-slate-950: #0c0e14;
+
+  /* Emerald (Success / Active) */
+  --color-emerald-50:  #ecfdf3;
+  --color-emerald-100: #d1fae0;
+  --color-emerald-200: #a6f4c5;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-700: #047857;
+
+  /* Amber (Warning / Needs Attention) */
+  --color-amber-50:  #fffbeb;
+  --color-amber-100: #fef3c7;
+  --color-amber-200: #fde68a;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+
+  /* Rose (Danger / Error) */
+  --color-rose-50:  #fff1f2;
+  --color-rose-100: #ffe4e6;
+  --color-rose-200: #fecdd3;
+  --color-rose-400: #fb7185;
+  --color-rose-500: #f43f5e;
+  --color-rose-600: #e11d48;
+  --color-rose-700: #be123c;
+
+  /* Sky (Info / Idle) */
+  --color-sky-50:  #f0f9ff;
+  --color-sky-100: #e0f2fe;
+  --color-sky-200: #bae6fd;
+  --color-sky-400: #38bdf8;
+  --color-sky-500: #0ea5e9;
+  --color-sky-600: #0284c7;
+}
+
+/* ── Semantic Tokens: Light Mode (default) ─────────────────────── */
+:root,
+[data-theme="light"] {
+  /* Backgrounds */
+  --bg-app:        var(--color-slate-25);
+  --bg-surface:    var(--color-slate-0);
+  --bg-elevated:   var(--color-slate-0);
+  --bg-inset:      var(--color-slate-50);
+  --bg-sidebar:    var(--color-slate-0);
+  --bg-hover:      var(--color-slate-50);
+  --bg-active:     var(--color-indigo-25);
+  --bg-selected:   var(--color-indigo-50);
+  --bg-overlay:    rgba(21, 24, 33, 0.45);
+
+  /* Text */
+  --text-primary:   var(--color-slate-900);
+  --text-secondary: var(--color-slate-600);
+  --text-tertiary:  var(--color-slate-400);
+  --text-disabled:  var(--color-slate-300);
+  --text-inverse:   var(--color-slate-0);
+  --text-link:      var(--color-indigo-600);
+  --text-link-hover:var(--color-indigo-700);
+
+  /* Borders */
+  --border-default: var(--color-slate-100);
+  --border-subtle:  var(--color-slate-50);
+  --border-strong:  var(--color-slate-200);
+  --border-focus:   var(--color-indigo-400);
+  --border-error:   var(--color-rose-400);
+
+  /* Brand / Primary */
+  --primary:           var(--color-indigo-500);
+  --primary-hover:     var(--color-indigo-600);
+  --primary-active:    var(--color-indigo-700);
+  --primary-subtle:    var(--color-indigo-50);
+  --primary-subtle-hover: var(--color-indigo-100);
+  --primary-text:      var(--color-slate-0);
+
+  /* Status: Active / Success */
+  --status-active-bg:    var(--color-emerald-50);
+  --status-active-text:  var(--color-emerald-700);
+  --status-active-dot:   var(--color-emerald-500);
+  --status-active-border:var(--color-emerald-200);
+
+  /* Status: Needs Attention / Warning */
+  --status-attention-bg:    var(--color-amber-50);
+  --status-attention-text:  var(--color-amber-700);
+  --status-attention-dot:   var(--color-amber-500);
+  --status-attention-border:var(--color-amber-200);
+
+  /* Status: Error */
+  --status-error-bg:    var(--color-rose-50);
+  --status-error-text:  var(--color-rose-700);
+  --status-error-dot:   var(--color-rose-500);
+  --status-error-border:var(--color-rose-200);
+
+  /* Status: Idle */
+  --status-idle-bg:    var(--color-slate-50);
+  --status-idle-text:  var(--color-slate-500);
+  --status-idle-dot:   var(--color-slate-300);
+  --status-idle-border:var(--color-slate-200);
+
+  /* Status: Waiting / Blocked */
+  --status-waiting-bg:    var(--color-sky-50);
+  --status-waiting-text:  var(--color-sky-600);
+  --status-waiting-dot:   var(--color-sky-400);
+  --status-waiting-border:var(--color-sky-200);
+
+  /* Danger */
+  --danger:        var(--color-rose-500);
+  --danger-hover:  var(--color-rose-600);
+  --danger-active: var(--color-rose-700);
+  --danger-subtle: var(--color-rose-50);
+  --danger-text:   var(--color-slate-0);
+
+  /* Chat bubbles */
+  --chat-user-bg:     var(--color-indigo-500);
+  --chat-user-text:   var(--color-slate-0);
+  --chat-agent-bg:    var(--color-slate-50);
+  --chat-agent-text:  var(--color-slate-900);
+  --chat-system-bg:   transparent;
+  --chat-system-text: var(--color-slate-400);
+
+  /* Shadows */
+  --shadow-xs:  0 1px 2px rgba(21, 24, 33, 0.04);
+  --shadow-sm:  0 1px 3px rgba(21, 24, 33, 0.06), 0 1px 2px rgba(21, 24, 33, 0.04);
+  --shadow-md:  0 4px 12px rgba(21, 24, 33, 0.07), 0 1px 3px rgba(21, 24, 33, 0.05);
+  --shadow-lg:  0 12px 32px rgba(21, 24, 33, 0.10), 0 4px 12px rgba(21, 24, 33, 0.06);
+  --shadow-xl:  0 20px 48px rgba(21, 24, 33, 0.14), 0 8px 20px rgba(21, 24, 33, 0.08);
+  --shadow-focus: 0 0 0 3px rgba(79, 91, 213, 0.25);
+  --shadow-error: 0 0 0 3px rgba(244, 63, 94, 0.20);
+}
+
+/* ── Semantic Tokens: Dark Mode ────────────────────────────────── */
+[data-theme="dark"] {
+  /* Backgrounds */
+  --bg-app:        var(--color-slate-950);
+  --bg-surface:    var(--color-slate-900);
+  --bg-elevated:   var(--color-slate-800);
+  --bg-inset:      var(--color-slate-950);
+  --bg-sidebar:    var(--color-slate-900);
+  --bg-hover:      var(--color-slate-800);
+  --bg-active:     rgba(79, 91, 213, 0.15);
+  --bg-selected:   rgba(79, 91, 213, 0.20);
+  --bg-overlay:    rgba(0, 0, 0, 0.60);
+
+  /* Text */
+  --text-primary:   var(--color-slate-50);
+  --text-secondary: var(--color-slate-400);
+  --text-tertiary:  var(--color-slate-500);
+  --text-disabled:  var(--color-slate-600);
+  --text-inverse:   var(--color-slate-900);
+  --text-link:      var(--color-indigo-300);
+  --text-link-hover:var(--color-indigo-200);
+
+  /* Borders */
+  --border-default: var(--color-slate-800);
+  --border-subtle:  var(--color-slate-900);
+  --border-strong:  var(--color-slate-700);
+  --border-focus:   var(--color-indigo-400);
+  --border-error:   var(--color-rose-400);
+
+  /* Brand */
+  --primary:           var(--color-indigo-400);
+  --primary-hover:     var(--color-indigo-300);
+  --primary-active:    var(--color-indigo-200);
+  --primary-subtle:    rgba(79, 91, 213, 0.15);
+  --primary-subtle-hover: rgba(79, 91, 213, 0.25);
+  --primary-text:      var(--color-slate-900);
+
+  /* Status: Active */
+  --status-active-bg:    rgba(16, 185, 129, 0.12);
+  --status-active-text:  var(--color-emerald-400);
+  --status-active-dot:   var(--color-emerald-400);
+  --status-active-border:rgba(16, 185, 129, 0.25);
+
+  /* Status: Attention */
+  --status-attention-bg:    rgba(245, 158, 11, 0.12);
+  --status-attention-text:  var(--color-amber-400);
+  --status-attention-dot:   var(--color-amber-400);
+  --status-attention-border:rgba(245, 158, 11, 0.25);
+
+  /* Status: Error */
+  --status-error-bg:    rgba(244, 63, 94, 0.12);
+  --status-error-text:  var(--color-rose-400);
+  --status-error-dot:   var(--color-rose-400);
+  --status-error-border:rgba(244, 63, 94, 0.25);
+
+  /* Status: Idle */
+  --status-idle-bg:    rgba(139, 148, 167, 0.10);
+  --status-idle-text:  var(--color-slate-400);
+  --status-idle-dot:   var(--color-slate-500);
+  --status-idle-border:rgba(139, 148, 167, 0.20);
+
+  /* Status: Waiting */
+  --status-waiting-bg:    rgba(14, 165, 233, 0.12);
+  --status-waiting-text:  var(--color-sky-400);
+  --status-waiting-dot:   var(--color-sky-400);
+  --status-waiting-border:rgba(14, 165, 233, 0.25);
+
+  /* Danger */
+  --danger:        var(--color-rose-400);
+  --danger-hover:  var(--color-rose-500);
+  --danger-active: var(--color-rose-600);
+  --danger-subtle: rgba(244, 63, 94, 0.12);
+  --danger-text:   var(--color-slate-0);
+
+  /* Chat */
+  --chat-user-bg:     var(--color-indigo-600);
+  --chat-user-text:   var(--color-slate-50);
+  --chat-agent-bg:    var(--color-slate-800);
+  --chat-agent-text:  var(--color-slate-50);
+  --chat-system-bg:   transparent;
+  --chat-system-text: var(--color-slate-500);
+
+  /* Shadows (darker, tighter in dark mode) */
+  --shadow-xs:  0 1px 2px rgba(0, 0, 0, 0.20);
+  --shadow-sm:  0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow-md:  0 4px 12px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.20);
+  --shadow-lg:  0 12px 32px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-xl:  0 20px 48px rgba(0, 0, 0, 0.45), 0 8px 20px rgba(0, 0, 0, 0.30);
+  --shadow-focus: 0 0 0 3px rgba(99, 112, 240, 0.35);
+  --shadow-error: 0 0 0 3px rgba(251, 113, 133, 0.30);
+}
+
+/* ── Typography ────────────────────────────────────────────────── */
+:root {
+  /* Font Families */
+  --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-body:    'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', 'SF Mono', 'Cascadia Code', ui-monospace, monospace;
+
+  /* Font Sizes — modular scale (1.2 ratio, 16px base) */
+  --text-2xs:  0.625rem;   /* 10px */
+  --text-xs:   0.6875rem;  /* 11px */
+  --text-sm:   0.8125rem;  /* 13px */
+  --text-base: 0.9375rem;  /* 15px */
+  --text-md:   1rem;       /* 16px */
+  --text-lg:   1.125rem;   /* 18px */
+  --text-xl:   1.3125rem;  /* 21px */
+  --text-2xl:  1.625rem;   /* 26px */
+  --text-3xl:  2rem;       /* 32px */
+
+  /* Font Weights */
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+  --weight-extrabold:800;
+
+  /* Line Heights */
+  --leading-none:    1;
+  --leading-tight:   1.25;
+  --leading-snug:    1.375;
+  --leading-normal:  1.5;
+  --leading-relaxed: 1.625;
+
+  /* Letter Spacing */
+  --tracking-tight:  -0.025em;
+  --tracking-normal:  0;
+  --tracking-wide:    0.025em;
+  --tracking-wider:   0.05em;
+  --tracking-caps:    0.08em;
+}
+
+/* ── Spacing Scale (4px base) ──────────────────────────────────── */
+:root {
+  --space-0:    0;
+  --space-0-5:  2px;
+  --space-1:    4px;
+  --space-1-5:  6px;
+  --space-2:    8px;
+  --space-2-5:  10px;
+  --space-3:    12px;
+  --space-4:    16px;
+  --space-5:    20px;
+  --space-6:    24px;
+  --space-7:    28px;
+  --space-8:    32px;
+  --space-9:    36px;
+  --space-10:   40px;
+  --space-12:   48px;
+  --space-14:   56px;
+  --space-16:   64px;
+  --space-20:   80px;
+  --space-24:   96px;
+}
+
+/* ── Border Radii ──────────────────────────────────────────────── */
+:root {
+  --radius-none: 0;
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-2xl:  20px;
+  --radius-full: 9999px;
+}
+
+/* ── Transitions & Animation ───────────────────────────────────── */
+:root {
+  --duration-fast:   100ms;
+  --duration-normal: 180ms;
+  --duration-slow:   300ms;
+  --duration-slower:  500ms;
+
+  --ease-default: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in:      cubic-bezier(0.4, 0, 1, 1);
+  --ease-out:     cubic-bezier(0, 0, 0.2, 1);
+  --ease-bounce:  cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring:  cubic-bezier(0.22, 1, 0.36, 1);
+
+  --transition-colors:    color var(--duration-normal) var(--ease-default),
+                          background-color var(--duration-normal) var(--ease-default),
+                          border-color var(--duration-normal) var(--ease-default);
+  --transition-transform: transform var(--duration-normal) var(--ease-default);
+  --transition-shadow:    box-shadow var(--duration-normal) var(--ease-default);
+  --transition-opacity:   opacity var(--duration-normal) var(--ease-default);
+  --transition-all:       all var(--duration-normal) var(--ease-default);
+}
+
+/* ── Z-Index Layers ────────────────────────────────────────────── */
+:root {
+  --z-base:       0;
+  --z-raised:     10;
+  --z-sidebar:    20;
+  --z-header:     30;
+  --z-dropdown:   40;
+  --z-sticky:     50;
+  --z-overlay:    60;
+  --z-modal:      70;
+  --z-popover:    80;
+  --z-toast:      90;
+  --z-tooltip:    100;
+  --z-max:        999;
+}
+
+/* ── Layout Constants ──────────────────────────────────────────── */
+:root {
+  --sidebar-width:     280px;
+  --sidebar-collapsed: 64px;
+  --header-height:     56px;
+  --tab-bar-height:    56px;
+  --max-content-width: 960px;
+  --chat-max-width:    720px;
+}
+
+/* ── Keyframe Animations ───────────────────────────────────────── */
+
+@keyframes aos-fade-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes aos-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes aos-slide-in-right {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes aos-slide-in-left {
+  from { opacity: 0; transform: translateX(-16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes aos-scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes aos-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.6; transform: scale(0.8); }
+}
+
+@keyframes aos-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes aos-bounce-in {
+  0%   { opacity: 0; transform: scale(0.3); }
+  50%  { opacity: 1; transform: scale(1.05); }
+  70%  { transform: scale(0.9); }
+  100% { transform: scale(1); }
+}
+
+/* ── Utility Animation Classes ─────────────────────────────────── */
+.aos-fade-up     { animation: aos-fade-up var(--duration-slow) var(--ease-spring) both; }
+.aos-fade-in     { animation: aos-fade-in var(--duration-slow) var(--ease-default) both; }
+.aos-slide-right { animation: aos-slide-in-right var(--duration-slow) var(--ease-spring) both; }
+.aos-slide-left  { animation: aos-slide-in-left var(--duration-slow) var(--ease-spring) both; }
+.aos-scale-in    { animation: aos-scale-in var(--duration-slow) var(--ease-spring) both; }
+.aos-bounce-in   { animation: aos-bounce-in var(--duration-slower) var(--ease-bounce) both; }
+
+/* Stagger delays */
+.aos-delay-1 { animation-delay: 50ms; }
+.aos-delay-2 { animation-delay: 100ms; }
+.aos-delay-3 { animation-delay: 150ms; }
+.aos-delay-4 { animation-delay: 200ms; }
+.aos-delay-5 { animation-delay: 250ms; }
+.aos-delay-6 { animation-delay: 300ms; }
