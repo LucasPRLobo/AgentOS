@@ -536,6 +536,7 @@ class WorkspaceSupervisor:
         content = msg.get("content", "")
         if not content:
             return
+        logger.debug("Routing message from %s to %s: %s", sender_id, target, content[:60])
 
         if target == "board":
             section = msg.get("section", "post")
@@ -544,7 +545,7 @@ class WorkspaceSupervisor:
                 author_type="agent", author_id=sender_id,
                 content=content, speech_act=SpeechAct(msg.get("speech_act", "inform")),
             ))
-            self._emit_event("board_post", {"author": sender_id, "content": content[:80]})
+            self._emit_event("board_post", {"author": sender_id, "content": content})
 
         elif target == "human":
             write_human_inbox(self._rt._workspace_dir, [{
@@ -552,7 +553,7 @@ class WorkspaceSupervisor:
                 "speech_act": msg.get("speech_act", "inform"),
                 "timestamp": msg.get("timestamp", _utc_now_iso()),
             }])
-            self._emit_event("message_to_human", {"from": sender_id, "content": content[:80]})
+            self._emit_event("message_to_human", {"from": sender_id, "content": content})
 
         else:
             # Message to another agent — write to their inbox
@@ -1101,6 +1102,12 @@ class WorkspaceSupervisor:
         if not proc:
             return
 
+        # Collect any outbox messages written during this turn
+        from agentos.comms.comms_state import read_agent_outbox
+        outbox = read_agent_outbox(self._rt._workspace_dir, agent_id)
+        for msg in outbox:
+            self._route_message(agent_id, msg)
+
         task_id = proc.current_task_id
         if not task_id or task_id == "dm-response":
             # DM response completed
@@ -1257,17 +1264,17 @@ class WorkspaceSupervisor:
         if not self._pending_human_messages:
             return
 
-        # Batch all pending messages
         messages = list(self._pending_human_messages)
         self._pending_human_messages.clear()
 
-        # Cooldown check
+        # Cooldown
         now = time.monotonic()
         if now - self._last_coordinator_time < self._config.coordinator_cooldown:
             return
         self._last_coordinator_time = now
 
-        # Run in background thread to not block the tick
+        # With persistent coordinator, the response is fast (stdin write + wait)
+        # Still run in thread to avoid blocking the tick
         threading.Thread(
             target=self._run_coordinator_response,
             args=(messages,),
@@ -1314,7 +1321,7 @@ class WorkspaceSupervisor:
         try:
             cmd = [
                 "claude", "--print", "--output-format", "text",
-                "--max-turns", "3", "--model", "sonnet",
+                "--max-turns", "5", "--model", "sonnet",
                 "--permission-mode", "bypassPermissions",
                 "-p", f"Respond to: {human_text}\n\nBe conversational, 2-4 sentences.",
             ]

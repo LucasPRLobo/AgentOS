@@ -26,6 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from rich.markdown import Markdown as RichMarkdown
+
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -107,7 +109,9 @@ class WorkspaceTUI(App):
     }
 
     #input-bar {
-        height: 3;
+        height: auto;
+        min-height: 3;
+        max-height: 8;
         background: $surface;
         border-top: solid $primary;
         padding: 0 1;
@@ -119,15 +123,33 @@ class WorkspaceTUI(App):
         padding: 0 1;
         content-align: right middle;
     }
+
+    /* View nav bar */
+    #view-nav {
+        height: 1;
+        background: $surface;
+        dock: bottom;
+    }
+    .view-btn {
+        width: auto;
+        min-width: 10;
+        padding: 0 2;
+        color: $text-muted;
+    }
+    .view-btn.--active {
+        color: $text;
+        background: $primary-background;
+        text-style: bold;
+    }
     """
 
     BINDINGS = [
         Binding("ctrl+q", "quit_app", "Quit", priority=True),
-        Binding("ctrl+p", "toggle_pause", "Pause/Resume"),
-        Binding("ctrl+right", "next_view", "Next view", priority=True),
-        Binding("ctrl+left", "prev_view", "Prev view", priority=True),
+        Binding("ctrl+p", "toggle_pause", "Pause/Resume", priority=True),
+        Binding("ctrl+right", "next_view", "→ view", priority=True, show=False),
+        Binding("ctrl+left", "prev_view", "← view", priority=True, show=False),
         Binding("f1", "go_home", "Home", priority=True),
-        Binding("f2", "go_agents", "Agents", priority=True),
+        Binding("f2", "go_agents", "Agents ←→", priority=True),
         Binding("f3", "go_board", "Board", priority=True),
         Binding("f4", "go_tasks", "Tasks", priority=True),
     ]
@@ -154,7 +176,8 @@ class WorkspaceTUI(App):
         self._views = ["home", "board", "tasks"]
         self._chat_history: dict[str, list[str]] = {}
         self._board_posts: list[dict] = []
-        self._total_tokens: int = 0  # Track total token usage
+        self._total_tokens: int = 0
+        self._agent_activities: dict[str, str] = {}  # Latest activity per agent
 
     def compose(self) -> ComposeResult:
         yield Static("", id="header")
@@ -176,6 +199,27 @@ class WorkspaceTUI(App):
             )
             yield Static("[dim]🏠 home[/]", id="view-tag")
         yield Footer()
+
+    def _update_view_tag(self) -> None:
+        """Update the view indicator with current view highlighted."""
+        view = self.current_view
+        parts = []
+        views_map = [
+            ("home", "🏠 Home"),
+            ("agents", "💬 Agents"),
+            ("board", "📋 Board"),
+            ("tasks", "📝 Tasks"),
+        ]
+        for key, label in views_map:
+            if view == key or (key == "agents" and view.startswith("agent:")):
+                parts.append(f"[bold]{label}[/]")
+            else:
+                parts.append(f"[dim]{label}[/]")
+
+        try:
+            self.query_one("#view-tag").update(" │ ".join(parts))
+        except Exception:
+            pass
 
     async def on_mount(self) -> None:
         if not self.mock and not self.blank_mode:
@@ -617,16 +661,66 @@ class WorkspaceTUI(App):
             self._chat_write(msg)
 
     def _chat_write(self, msg: str) -> None:
-        """Write directly to the visible chat log."""
+        """Write to the visible chat log. Renders markdown for agent/coordinator responses."""
         try:
-            self.query_one("#chat-log", RichLog).write(msg)
+            log = self.query_one("#chat-log", RichLog)
+            # Detect markdown in coordinator/agent responses (has headers, lists, bold, code)
+            if self._looks_like_markdown(msg):
+                # Extract the prefix (author label) and render body as markdown
+                prefix, body = self._split_author_body(msg)
+                if prefix:
+                    log.write(prefix)
+                log.write(RichMarkdown(body))
+            else:
+                log.write(msg)
         except Exception:
             pass
 
+    @staticmethod
+    def _looks_like_markdown(text: str) -> bool:
+        """Heuristic: does this text contain markdown formatting?"""
+        # Strip Rich markup tags for detection
+        clean = text.replace("[/]", "").replace("[dim]", "").replace("[bold]", "")
+        clean = clean.replace("[yellow]", "").replace("[cyan]", "").replace("[magenta]", "")
+        clean = clean.replace("[green]", "").replace("[red]", "")
+        indicators = ["**", "##", "```", "| ", "- ", "1. ", "* "]
+        return any(ind in clean for ind in indicators) and len(clean) > 50
+
+    @staticmethod
+    def _split_author_body(msg: str) -> tuple[str, str]:
+        """Split 'author: body' into Rich prefix and markdown body."""
+        # Pattern: "[yellow]coordinator[/]: rest of message"
+        for prefix_end in ("]: ", "[/]: "):
+            if prefix_end in msg:
+                idx = msg.index(prefix_end) + len(prefix_end)
+                return msg[:idx], msg[idx:]
+        return "", msg
+
     def _activity_write(self, msg: str) -> None:
-        """Write to the activity strip."""
+        """Update the activity strip — shows latest activity per agent."""
+        # Parse agent name from the message format "[dim]agent: activity[/]"
+        # Just update the Static with all latest activities
         try:
-            self.query_one("#activity-strip", RichLog).write(msg)
+            strip = self.query_one("#activity-strip", RichLog)
+            strip.write(msg)
+            # Keep only last 20 lines to prevent bloat
+            if hasattr(strip, '_lines') and len(strip._lines) > 20:
+                strip.clear()
+        except Exception:
+            pass
+
+    def _update_activity_strip(self) -> None:
+        """Rebuild activity strip with latest activity per agent."""
+        if not self._agent_activities:
+            return
+        lines = []
+        for agent_id, activity in self._agent_activities.items():
+            lines.append(f"[dim]{agent_id}: {activity}[/]")
+        try:
+            strip = self.query_one("#activity-strip", RichLog)
+            strip.clear()
+            for line in lines[-4:]:  # Show max 4 agents
+                strip.write(line)
         except Exception:
             pass
 
@@ -710,7 +804,9 @@ class WorkspaceTUI(App):
         elif t == "agent_spawned":
             agent = e.get("agent", "?")
             task = e.get("task", "?")
-            self._add_to_view("home", f"  [green]●[/] [bold]{agent}[/] started: {task}")
+            # Don't clutter home with DM response notifications
+            if task != "responding to messages" and task != "initializing":
+                self._add_to_view("home", f"  [green]●[/] [bold]{agent}[/] started: {task}")
             self._add_to_view(f"agent:{agent}", f"[dim]Started task: {task}[/]")
 
         elif t == "agent_completed":
@@ -718,8 +814,13 @@ class WorkspaceTUI(App):
             task = e.get("task", "?")
             files = e.get("files", [])
             f_str = f" → {', '.join(files[:3])}" if files else ""
-            self._add_to_view("home", f"  [green]✓[/] [bold]{agent}[/] completed: {task}{f_str}")
+            # Skip DM response completions on home (noise)
+            if task != "responded to messages":
+                self._add_to_view("home", f"  [green]✓[/] [bold]{agent}[/] completed: {task}{f_str}")
             self._add_to_view(f"agent:{agent}", f"[green]Completed: {task}{f_str}[/]")
+            # Clear activity for this agent
+            self._agent_activities.pop(agent, None)
+            self._update_activity_strip()
 
         elif t == "agent_killed":
             agent = e.get("agent", "?")
@@ -730,10 +831,12 @@ class WorkspaceTUI(App):
         elif t == "agent_activity":
             agent = e.get("agent", "?")
             activity = e.get("activity", "")
-            # Always show in activity strip (bottom)
-            self._activity_write(f"[dim]{agent}: {activity}[/]")
-            # Show in agent's dedicated chat view
-            self._add_to_view(f"agent:{agent}", f"  [dim]{activity}[/]")
+            # Track latest activity per agent (for sidebar + activity strip)
+            self._agent_activities[agent] = activity
+            self._update_activity_strip()
+            # Show in agent's dedicated chat view (only if currently viewing)
+            if self.current_view == f"agent:{agent}":
+                self._chat_write(f"  [dim]{activity}[/]")
 
         elif t == "message_to_human":
             sender = e.get("from", "?")
@@ -770,19 +873,23 @@ class WorkspaceTUI(App):
             return
 
         board = self.runtime.board.get_state()
+        # Check both legacy active and persistent processes
         active = getattr(self.supervisor, '_active', {}) if self.supervisor else {}
+        persistent = getattr(self.supervisor, '_persistent', {}) if self.supervisor else {}
 
         agent_lines = []
         for s in board.team_status:
             aid = s.agent_id
             is_human = any(p.type == "human" and p.name == aid for p in self.runtime.config.team)
-            is_running = aid in active
+
+            # Check persistent process state first, then legacy
+            p_proc = persistent.get(aid)
+            is_running = (p_proc and p_proc.is_busy) or aid in active
 
             if is_running:
-                last = self._last_activity(aid)
-                elapsed = self._agent_elapsed(active.get(aid))
-                short = (last[:18] + "…") if len(last) > 18 else last if last else ""
-                agent_lines.append(f"[green]●[/] [bold]{aid}[/]\n  [dim]{short} {elapsed}[/]")
+                activity = self._agent_activities.get(aid, "")
+                short = (activity[:18] + "…") if len(activity) > 18 else activity if activity else "working…"
+                agent_lines.append(f"[green]●[/] [bold]{aid}[/]\n  [dim]{short}[/]")
             elif is_human:
                 agent_lines.append(f"[cyan]◉[/] [bold]{aid}[/] [dim](you)[/]")
             elif aid == "coordinator" or aid == "Coordinator":
@@ -1071,13 +1178,16 @@ class WorkspaceTUI(App):
         try:
             self.query_one("#chat-label").update(label)
             self.query_one("#cmd-input", Input).placeholder = placeholder
-            self.query_one("#view-tag").update(f"[dim]{tag}[/]")
+            self._update_view_tag()
         except Exception:
             pass
 
-        # Replay history for this view
+        # Replay history for this view — filter tool noise for agent views
         history = self._chat_history.get(view, [])
-        for msg in history[-50:]:  # last 50 messages
+        for msg in history[-50:]:
+            # In agent DM views, skip dim tool call lines for cleaner reading
+            if view.startswith("agent:") and msg.strip().startswith("[dim]  "):
+                continue  # Skip tool call activity in replay
             chat_log.write(msg)
 
         # For tasks view, show current task list
