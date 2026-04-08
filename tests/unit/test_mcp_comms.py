@@ -127,6 +127,26 @@ class TestSendMessage:
         assert data["speech_act"] == "request"
         assert data["priority"] == "high"
 
+    def test_send_uses_per_agent_outbox_when_agent_id_set(self, setup_workspace, monkeypatch):
+        """When AGENTOS_AGENT_ID is set, send_message writes to the per-agent
+        outbox directory so the supervisor's read_all_agent_outboxes picks it up.
+        This is the fix for the bug where agent DM replies were invisible to the TUI.
+        """
+        monkeypatch.setenv("AGENTOS_AGENT_ID", "researcher")
+        result = mcp_mod.send_message(to="human", content="Here is my reply")
+        assert "Message sent" in result
+
+        # Message must be in the per-agent outbox
+        from agentos.comms.comms_state import read_agent_outbox
+        msgs = read_agent_outbox(setup_workspace, "researcher")
+        assert len(msgs) == 1
+        assert msgs[0]["to"] == "human"
+        assert msgs[0]["content"] == "Here is my reply"
+
+        # Legacy global outbox must be empty
+        global_outbox = setup_workspace / ".agentos" / "outbox"
+        assert not global_outbox.exists() or list(global_outbox.glob("*.json")) == []
+
     def test_invalid_speech_act(self, setup_workspace):
         result = mcp_mod.send_message(to="x", content="y", speech_act="bad")
         assert "Invalid" in result

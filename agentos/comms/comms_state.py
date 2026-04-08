@@ -195,6 +195,26 @@ def clear_agent_inbox(workspace: Path, agent_id: str) -> None:
         inbox_path.write_text("[]")
 
 
+def write_agent_outbox_message(workspace: Path, agent_id: str, message: dict) -> Path:
+    """Write a single message to an agent's per-agent outbox directory.
+
+    This is the counterpart to read_agent_outbox — messages written here are
+    picked up by the supervisor on the next tick and routed to their destination.
+
+    The legacy write_outbox_message writes to .agentos/outbox/ (the global
+    outbox), which the supervisor never reads.  This function writes to the
+    correct per-agent path: .agentos/agents/{agent_id}/outbox/.
+    """
+    agent_dir = ensure_agent_dir(workspace, agent_id)
+    outbox_dir = agent_dir / "outbox"
+    outbox_dir.mkdir(exist_ok=True)
+    existing = list(outbox_dir.glob("*.json"))
+    index = len(existing)
+    path = outbox_dir / f"mcp-{index:04d}.json"
+    path.write_text(json.dumps(message, indent=2))
+    return path
+
+
 def read_agent_outbox(workspace: Path, agent_id: str) -> list[dict]:
     """Read and clear all messages from an agent's outbox/."""
     agent_dir = _agentos_dir(workspace) / "agents" / agent_id

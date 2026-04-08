@@ -137,23 +137,37 @@ class WorkspaceSupervisor:
     # Main loop
     # ------------------------------------------------------------------
 
-    async def run(self) -> dict:
-        """Run the supervisor until workspace completes or is paused."""
+    async def run(self, resume_from_checkpoint: bool = False) -> dict:
+        """Run the supervisor until workspace completes or is paused.
+
+        When *resume_from_checkpoint* is True, skip the initial coordinator
+        decomposition (tasks already exist in backlog) and restore agent state
+        from a previously saved checkpoint.
+        """
+        workspace_dir = self._rt._workspace_dir
+
+        # Apply checkpoint before start() so agent session state is ready
+        if resume_from_checkpoint and workspace_dir:
+            from agentos.workspace.checkpoint import apply_checkpoint, load_checkpoint
+            cp = load_checkpoint(workspace_dir)
+            if cp:
+                apply_checkpoint(self, cp)
+
         self._rt.start()
         self._emit_event("workspace_started", {"name": self._rt.config.name})
 
         # Write workspace CLAUDE.md
-        if self._rt._workspace_dir and self._repo_map:
+        if workspace_dir and self._repo_map:
             from agentos.workspace.repo_map import write_workspace_claude_md
             write_workspace_claude_md(
-                self._rt._workspace_dir, self._rt.config, self._repo_map,
+                workspace_dir, self._rt.config, self._repo_map,
             )
 
         # Launch persistent agent processes (one per agent, stays alive)
         self._launch_all_persistent()
 
-        # Initial decomposition if no tasks
-        if not self._rt.backlog.get_all_tasks():
+        # Initial decomposition only when starting fresh (no tasks yet)
+        if not resume_from_checkpoint and not self._rt.backlog.get_all_tasks():
             self._status("Coordinator decomposing goal...", "Planning")
             await self._invoke_coordinator("decompose")
 
@@ -165,6 +179,11 @@ class WorkspaceSupervisor:
             await self._tick()
             await asyncio.sleep(self._config.poll_interval)
 
+        # On clean completion, remove the checkpoint (session fully done)
+        if self._rt.state.status == WorkspaceStatus.COMPLETED and workspace_dir:
+            from agentos.workspace.checkpoint import delete_checkpoint
+            delete_checkpoint(workspace_dir)
+
         # Shutdown all persistent processes
         self._shutdown_persistent()
 
@@ -173,6 +192,18 @@ class WorkspaceSupervisor:
             "reason": str(self._rt.state.status),
             "ticks": self._tick_count,
         }
+
+    def save_checkpoint(self) -> None:
+        """Write current supervisor state to checkpoint.json.
+
+        Called on SIGTERM / Ctrl+Q so the session can be resumed later.
+        No-op if no workspace_dir is configured.
+        """
+        workspace_dir = self._rt._workspace_dir
+        if not workspace_dir:
+            return
+        from agentos.workspace.checkpoint import save_checkpoint
+        save_checkpoint(self, workspace_dir)
 
     def _shutdown_persistent(self) -> None:
         """Close all persistent processes gracefully."""
@@ -1095,6 +1126,22 @@ class WorkspaceSupervisor:
         desc = self._describe_tool_call(name, inp)
         if desc:
             self._emit_event("agent_activity", {"agent": agent_id, "activity": desc})
+            # Keep board progress_summary in sync so the TUI has live activity text
+            proc = self._persistent.get(agent_id)
+            task_title = proc.current_task_id if proc else None
+            # Resolve task_id to a human-readable title if possible
+            if task_title and task_title not in ("dm-response", None):
+                try:
+                    task_title = self._rt.backlog.get_task(task_title).title
+                except (ValueError, AttributeError):
+                    pass
+            self._rt.board.update_agent_status(AgentStatus(
+                agent_id=agent_id,
+                agent_name=agent_id,
+                state="running",
+                current_task=task_title,
+                progress_summary=desc[:80],
+            ))
 
     def _handle_persistent_result(self, agent_id: str, result: dict) -> None:
         """Callback: persistent process completed a turn."""

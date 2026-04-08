@@ -6,8 +6,10 @@ import pytest
 
 from agentos.comms.board_manager import BoardManager
 from agentos.comms.comms_state import (
+    read_agent_outbox,
     read_comms_state,
     refresh_comms_state,
+    write_agent_outbox_message,
     write_comms_state,
     write_outbox_message,
 )
@@ -86,6 +88,47 @@ class TestWriteOutboxMessage:
         outbox = workspace / ".agentos" / "outbox"
         files = sorted(outbox.glob("*.json"))
         assert len(files) == 2
+
+
+class TestWriteAgentOutboxMessage:
+    """write_agent_outbox_message writes to the per-agent outbox path that the
+    supervisor's read_all_agent_outboxes reads.  This is the correct path for
+    MCP-originated messages.
+    """
+
+    def test_writes_to_agent_outbox_dir(self, workspace):
+        msg = {"to": "human", "content": "hello from agent"}
+        path = write_agent_outbox_message(workspace, "researcher", msg)
+        assert path.exists()
+        expected_dir = workspace / ".agentos" / "agents" / "researcher" / "outbox"
+        assert path.parent == expected_dir
+        assert json.loads(path.read_text())["content"] == "hello from agent"
+
+    def test_supervisor_can_read_it_back(self, workspace):
+        """read_agent_outbox should pick up messages written by write_agent_outbox_message."""
+        write_agent_outbox_message(workspace, "coder", {"to": "human", "content": "reply"})
+        msgs = read_agent_outbox(workspace, "coder")
+        assert len(msgs) == 1
+        assert msgs[0]["content"] == "reply"
+
+    def test_read_clears_outbox(self, workspace):
+        write_agent_outbox_message(workspace, "coder", {"to": "human", "content": "msg"})
+        read_agent_outbox(workspace, "coder")  # consume
+        msgs = read_agent_outbox(workspace, "coder")
+        assert msgs == []
+
+    def test_sequential_naming(self, workspace):
+        write_agent_outbox_message(workspace, "agent-a", {"to": "human", "content": "1"})
+        write_agent_outbox_message(workspace, "agent-a", {"to": "human", "content": "2"})
+        outbox_dir = workspace / ".agentos" / "agents" / "agent-a" / "outbox"
+        files = sorted(outbox_dir.glob("*.json"))
+        assert len(files) == 2
+
+    def test_separate_from_legacy_global_outbox(self, workspace):
+        """Per-agent outbox must be independent of the legacy .agentos/outbox/."""
+        write_agent_outbox_message(workspace, "agent-x", {"to": "human", "content": "a"})
+        legacy_outbox = workspace / ".agentos" / "outbox"
+        assert not legacy_outbox.exists() or list(legacy_outbox.glob("*.json")) == []
 
 
 class TestRefreshCommsState:

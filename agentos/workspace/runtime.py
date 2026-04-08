@@ -259,12 +259,17 @@ class WorkspaceRuntime:
         self,
         supervisor_config: Any = None,
         on_event: Callable | None = None,
+        resume_from_checkpoint: bool = False,
     ) -> dict:
         """Run workspace with concurrent agent execution (the real vision).
 
         Agents run simultaneously. The human participates via commands.json.
         The supervisor polls every 2-3 seconds, routing messages and spawning
         agents as needed.
+
+        When *resume_from_checkpoint* is True, the supervisor will skip the
+        initial coordinator decomposition and restore agent session state from
+        the previously saved checkpoint.
         """
         from agentos.workspace.schemas import SupervisorConfig
         from agentos.workspace.supervisor import WorkspaceSupervisor
@@ -277,7 +282,7 @@ class WorkspaceRuntime:
         if on_event:
             supervisor.set_event_callback(on_event)
 
-        return await supervisor.run()
+        return await supervisor.run(resume_from_checkpoint=resume_from_checkpoint)
 
     async def run(
         self,

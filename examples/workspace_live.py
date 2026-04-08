@@ -52,6 +52,20 @@ class CommandSuggester(SuggestFromList):
         return await super().get_suggestion(value)
 
 
+class MultiLineInput(Input):
+    """Input that handles multi-line paste by joining lines with spaces."""
+
+    def _on_paste(self, event) -> None:
+        """Intercept paste — join multiple lines into one."""
+        if hasattr(event, 'text') and event.text:
+            # Replace newlines with spaces so pasted text stays on one line
+            cleaned = event.text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+            # Strip excessive whitespace
+            cleaned = " ".join(cleaned.split())
+            event.text = cleaned
+        super()._on_paste(event)
+
+
 class WorkspaceTUI(App):
     TITLE = "AgentOS"
     ENABLE_COMMAND_PALETTE = False
@@ -158,7 +172,9 @@ class WorkspaceTUI(App):
     agent_index: int = 0
 
     def __init__(self, yaml_path: Path | None = None, mock: bool = False,
-                 skip_coordinator: bool = False):
+                 skip_coordinator: bool = False,
+                 workspace_dir: Path | None = None,
+                 resume: bool = False):
         super().__init__()
         self.yaml_path = yaml_path
         self.mock = mock
@@ -168,7 +184,9 @@ class WorkspaceTUI(App):
         self._setup_started = False
         self.runtime = None
         self.supervisor = None
-        self.workspace = None
+        # Use the provided persistent workspace_dir (for resume), or None (fresh)
+        self.workspace: Path | None = workspace_dir
+        self._resume = resume          # True → resume from checkpoint
         self._events: list[dict] = []
         self._lock = threading.Lock()
         self._seen: set[int] = set()
@@ -192,7 +210,7 @@ class WorkspaceTUI(App):
                 yield RichLog(id="chat-log", wrap=True, markup=True)
                 yield RichLog(id="activity-strip", wrap=True, markup=True)
         with Horizontal(id="input-bar"):
-            yield Input(
+            yield MultiLineInput(
                 placeholder="Chat with coordinator… (or /command)",
                 id="cmd-input",
                 suggester=CommandSuggester(),
@@ -243,10 +261,16 @@ class WorkspaceTUI(App):
             self.set_interval(1.0, self._refresh)
             return
 
-        tmpdir = Path(tempfile.mkdtemp(prefix="agentos_live_"))
-        self._tmpdir = tmpdir
-        self.workspace = tmpdir / "workspace"
-        self.workspace.mkdir()
+        # Set up workspace directory: use persistent dir (resume) or create a temp one
+        if self.workspace is not None:
+            # Resuming: workspace already set to the persistent directory
+            tmpdir = self.workspace.parent
+            self._tmpdir = tmpdir
+        else:
+            tmpdir = Path(tempfile.mkdtemp(prefix="agentos_live_"))
+            self._tmpdir = tmpdir
+            self.workspace = tmpdir / "workspace"
+            self.workspace.mkdir()
 
         from agentos.workspace.loader import load_workspace_config
         from agentos.kernel.event_log import SQLiteEventLog
@@ -282,6 +306,10 @@ class WorkspaceTUI(App):
             self._add_to_view("home", "[yellow]coordinator[/]: Mock mode — tasks pre-loaded, no real agents.")
             self._add_to_view("home", "")
             self._setup_mock()
+        elif self._resume:
+            self._add_to_view("home", "[yellow]coordinator[/]: Resuming previous session.")
+            self._add_to_view("home", "")
+            self.run_supervisor(resume=True)
         elif self.skip_coordinator:
             self._add_to_view("home", "[yellow]coordinator[/]: Tasks pre-loaded. Launching agents now.")
             self._add_to_view("home", "")
@@ -727,7 +755,7 @@ class WorkspaceTUI(App):
     # ── Supervisor ────────────────────────────────────────────────
 
     @work(thread=True)
-    def run_supervisor(self) -> None:
+    def run_supervisor(self, resume: bool = False) -> None:
         loop = asyncio.new_event_loop()
 
         def event_cb(event):
@@ -750,7 +778,7 @@ class WorkspaceTUI(App):
         self.supervisor.set_event_callback(event_cb)
         self.supervisor.set_status_callback(status_cb)
 
-        loop.run_until_complete(self.supervisor.run())
+        loop.run_until_complete(self.supervisor.run(resume_from_checkpoint=resume))
 
     # ── Periodic refresh ──────────────────────────────────────────
 
@@ -846,7 +874,6 @@ class WorkspaceTUI(App):
             # Compact notification on home
             short = content[:80] + "…" if len(content) > 80 else content
             self._add_to_view("home", f"  [yellow]💬 {sender}[/]: {short}")
-            self._add_to_view(f"agent:{sender}", f"[yellow]{sender}[/]: {content}")
 
         elif t == "workspace_completed":
             self._add_to_view("home", f"[green bold]■ Workspace completed: {e.get('reason', '?')}[/]")
@@ -882,12 +909,20 @@ class WorkspaceTUI(App):
             aid = s.agent_id
             is_human = any(p.type == "human" and p.name == aid for p in self.runtime.config.team)
 
-            # Check persistent process state first, then legacy
+            # Use board state as the primary truth (updated by update_agent_status),
+            # supplemented by live process checks for legacy subprocess agents.
             p_proc = persistent.get(aid)
-            is_running = (p_proc and p_proc.is_busy) or aid in active
+            is_running = (
+                s.state == "running"                  # board canonical state
+                or (p_proc and p_proc.is_busy)        # live persistent-process check
+                or aid in active                      # legacy subprocess check
+            )
 
             if is_running:
+                # Prefer live tool-call activity; fall back to board current_task
                 activity = self._agent_activities.get(aid, "")
+                if not activity:
+                    activity = s.current_task or s.progress_summary or ""
                 short = (activity[:18] + "…") if len(activity) > 18 else activity if activity else "working…"
                 agent_lines.append(f"[green]●[/] [bold]{aid}[/]\n  [dim]{short}[/]")
             elif is_human:
@@ -1015,7 +1050,9 @@ class WorkspaceTUI(App):
         if line in ("/quit", "/q"):
             if self.workspace:
                 write_human_command(self.workspace, {"action": "complete", "payload": {}})
-            self._chat_write("[yellow]Stopping…[/]")
+            # Save checkpoint so the session can be resumed after a restart
+            self._save_checkpoint()
+            self._chat_write("[yellow]Stopping… (checkpoint saved)[/]")
             self.set_timer(1.5, self.exit)
 
         elif line == "/pause":
@@ -1227,6 +1264,17 @@ class WorkspaceTUI(App):
         else:
             self._handle_command("/resume")
 
+    # ── Checkpoint helpers ────────────────────────────────────────
+
+    def _save_checkpoint(self) -> None:
+        """Save supervisor state checkpoint so the session can be resumed."""
+        if self.supervisor is None or self.workspace is None:
+            return
+        try:
+            self.supervisor.save_checkpoint()
+        except Exception as exc:
+            self._chat_write(f"[dim]Warning: checkpoint save failed: {exc}[/]")
+
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -1245,8 +1293,80 @@ def main():
         print(f"File not found: {yaml_path}")
         sys.exit(1)
 
-    app = WorkspaceTUI(yaml_path, mock=mock, skip_coordinator=skip_coord)
+    # Check for a resumable checkpoint. Checkpoints are stored under a
+    # deterministic workspace directory derived from the yaml filename so
+    # they survive process restarts.
+    workspace_dir, resume = _detect_checkpoint(yaml_path, flags)
+
+    app = WorkspaceTUI(
+        yaml_path, mock=mock, skip_coordinator=skip_coord,
+        workspace_dir=workspace_dir, resume=resume,
+    )
     app.run()
+
+
+def _detect_checkpoint(yaml_path: Path, flags: list[str]) -> tuple[Path | None, bool]:
+    """Check for a saved checkpoint for *yaml_path*.
+
+    Returns ``(workspace_dir, resume)`` where *workspace_dir* is the
+    persistent directory to use and *resume* is True when the user
+    chose to resume.
+
+    The persistent workspace lives at::
+
+        ~/.agentos/workspaces/<yaml-stem>/workspace/
+
+    If ``--no-resume`` is passed or no checkpoint exists, returns a fresh
+    workspace directory (None) so on_mount creates a temp one.
+    """
+    if "--no-resume" in flags:
+        return None, False
+
+    try:
+        from agentos.workspace.checkpoint import checkpoint_summary
+    except ImportError:
+        return None, False
+
+    # Deterministic workspace dir keyed to the yaml filename
+    agentos_home = Path.home() / ".agentos" / "workspaces" / yaml_path.stem
+    workspace_dir = agentos_home / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    summary = checkpoint_summary(workspace_dir)
+    if summary is None:
+        # No checkpoint — return the persistent dir for future saves
+        return workspace_dir, False
+
+    # Ask the user
+    saved_at = summary["saved_at"][:19].replace("T", " ")
+    tasks = summary["task_count"]
+    in_prog = summary["in_progress_count"]
+    print()
+    print(f"  Found a checkpoint from {saved_at}")
+    print(f"  Tasks: {tasks} total, {in_prog} were in-progress")
+    print()
+
+    if "--resume" in flags:
+        print("  Resuming (--resume flag set).")
+        return workspace_dir, True
+
+    try:
+        answer = input("  Resume previous session? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = "n"
+
+    if answer in ("y", "yes"):
+        return workspace_dir, True
+
+    # User chose not to resume — clear the old checkpoint so it doesn't
+    # interfere, but keep the workspace dir for new saves.
+    try:
+        from agentos.workspace.checkpoint import delete_checkpoint
+        delete_checkpoint(workspace_dir)
+    except Exception:
+        pass
+
+    return workspace_dir, False
 
 
 if __name__ == "__main__":

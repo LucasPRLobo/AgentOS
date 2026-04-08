@@ -99,9 +99,20 @@ def _read_state() -> dict:
 
 
 def _write_outbox(message: dict) -> str:
-    """Write a message to the outbox."""
-    from agentos.comms.comms_state import write_outbox_message
-    path = write_outbox_message(_get_workspace(), message)
+    """Write a message to the agent's per-agent outbox directory.
+
+    Uses write_agent_outbox_message so the supervisor's read_all_agent_outboxes
+    picks it up on the next tick.  The legacy write_outbox_message wrote to a
+    global .agentos/outbox/ path that the supervisor never reads.
+    """
+    agent_id = os.environ.get("AGENTOS_AGENT_ID", "")
+    if agent_id:
+        from agentos.comms.comms_state import write_agent_outbox_message
+        path = write_agent_outbox_message(_get_workspace(), agent_id, message)
+    else:
+        # Fallback for unknown agent — use legacy global outbox
+        from agentos.comms.comms_state import write_outbox_message
+        path = write_outbox_message(_get_workspace(), message)
     return str(path.name)
 
 
@@ -184,6 +195,12 @@ def check_messages() -> str:
     """
     state = _read_state()
     inbox = state.get("inbox", [])
+
+    # Clear the inbox so messages are not shown again on subsequent calls.
+    agent_id = os.environ.get("AGENTOS_AGENT_ID", "")
+    if inbox and agent_id:
+        from agentos.comms.comms_state import clear_agent_inbox
+        clear_agent_inbox(_get_workspace(), agent_id)
 
     if not inbox:
         return "No new messages."
